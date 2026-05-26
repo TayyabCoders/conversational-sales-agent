@@ -1,0 +1,66 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # FastAPI Application
+  - job_name: 'fastapi-app'
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # PostgreSQL Exporter
+  - job_name: 'fastapi-postgres'
+    static_configs:
+      - targets: ['fastapi-postgres-exporter:9187']
+    scrape_interval: 30s
+
+  # Redis Exporters
+  - job_name: 'fastapi-redis'
+    static_configs:
+      - targets: 
+        - 'fastapi-redis-exporter-1:9121'
+        - 'fastapi-redis-exporter-2:9121'
+        - 'fastapi-redis-exporter-3:9121'
+    scrape_interval: 15s
+
+  # RabbitMQ
+  - job_name: 'fastapi-rabbitmq'
+    static_configs:
+      - targets: ['fastapi-rabbitmq:15672']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Kafka Exporter
+  - job_name: 'fastapi-kafka'
+    static_configs:
+      - targets: ['fastapi-kafka-exporter:9308']
+    scrape_interval: 30s
+
+  # Zookeeper Exporter
+  - job_name: 'fastapi-zookeeper'
+    static_configs:
+      - targets: ['fastapi-zookeeper-exporter:9141']
+    scrape_interval: 30s
+
+  # MQTT Exporter
+  - job_name: 'fastapi-mqtt'
+    static_configs:
+      - targets: ['fastapi-mqtt-exporter:9641']
+    scrape_interval: 30s
+
+  # Node Exporter (if running on host)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['host.docker.internal:9100']
+    scrape_interval: 30s

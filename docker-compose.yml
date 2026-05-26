@@ -1,0 +1,289 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Primary
+  fastapi-postgres-primary:
+    image: postgres:16
+    container_name: fastapi-postgres-primary
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: 1234
+      POSTGRES_DB: app_db
+      REPLICATION_USER: replicator
+      REPLICATION_PASSWORD: 1234
+    ports:
+      - "5433:5432"  # +1 from original 5432
+    volumes:
+      - fastapi-postgres-primary-data:/var/lib/postgresql/data
+      - ./init-primary.sh:/docker-entrypoint-initdb.d/init-primary.sh
+    command: >
+      postgres
+      -c wal_level=replica
+      -c hot_standby=on
+      -c max_wal_senders=3
+      -c max_replication_slots=3
+      -c listen_addresses=*
+      -c hot_standby_feedback=on
+    networks:
+      - fastapi-network
+
+  # PostgreSQL Replica
+  fastapi-postgres-replica:
+    image: postgres:16
+    container_name: fastapi-postgres-replica
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: 1234
+      POSTGRES_DB: app_db
+      REPLICATION_USER: replicator
+      REPLICATION_PASSWORD: 1234
+    ports:
+      - "5434:5432"  # +1 from original 5433
+    volumes:
+      - fastapi-postgres-replica-data:/var/lib/postgresql/data
+      - ./init-replica.sh:/docker-entrypoint-initdb.d/init-replica.sh
+    depends_on:
+      - fastapi-postgres-primary
+    command: >
+      postgres
+      -c hot_standby=on
+    networks:
+      - fastapi-network
+
+  # PostgreSQL Exporter
+  fastapi-postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: fastapi-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://user:1234@fastapi-postgres-primary:5432/app_db?sslmode=disable"
+    ports:
+      - "9188:9187"  # +1 from original 9187
+    depends_on:
+      - fastapi-postgres-primary
+    networks:
+      - fastapi-network
+
+  # Redis Cluster
+  fastapi-redis-node-1:
+    image: redis:7-alpine
+    container_name: fastapi-redis-node-1
+    command: redis-server --port 7000 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes
+    ports:
+      - "7004:7000"  # +1 from original 7003
+    networks:
+      - fastapi-network
+
+  fastapi-redis-node-2:
+    image: redis:7-alpine
+    container_name: fastapi-redis-node-2
+    command: redis-server --port 7001 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes
+    ports:
+      - "7002:7001"  # +1 from original 7001
+    networks:
+      - fastapi-network
+
+  fastapi-redis-node-3:
+    image: redis:7-alpine
+    container_name: fastapi-redis-node-3
+    command: redis-server --port 7002 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes
+    ports:
+      - "7003:7002"  # +1 from original 7002
+    networks:
+      - fastapi-network
+
+  # Redis Exporters
+  fastapi-redis-exporter-1:
+    image: oliver006/redis_exporter:latest
+    container_name: fastapi-redis-exporter-1
+    environment:
+      REDIS_ADDR: fastapi-redis-node-1:7000
+    ports:
+      - "9122:9121"  # +1 from original 9121
+    depends_on:
+      - fastapi-redis-node-1
+    networks:
+      - fastapi-network
+
+  fastapi-redis-exporter-2:
+    image: oliver006/redis_exporter:latest
+    container_name: fastapi-redis-exporter-2
+    environment:
+      REDIS_ADDR: fastapi-redis-node-2:7001
+    ports:
+      - "9123:9121"  # +1 from original 9122
+    depends_on:
+      - fastapi-redis-node-2
+    networks:
+      - fastapi-network
+
+  fastapi-redis-exporter-3:
+    image: oliver006/redis_exporter:latest
+    container_name: fastapi-redis-exporter-3
+    environment:
+      REDIS_ADDR: fastapi-redis-node-3:7002
+    ports:
+      - "9124:9121"  # +1 from original 9123
+    depends_on:
+      - fastapi-redis-node-3
+    networks:
+      - fastapi-network
+
+  # RabbitMQ
+  fastapi-rabbitmq:
+    image: rabbitmq:3-management
+    container_name: fastapi-rabbitmq
+    ports:
+      - "5673:5672"  # +1 from original 5672
+      - "15673:15672"  # +1 from original 15672
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    networks:
+      - fastapi-network
+
+  # Zookeeper
+  fastapi-zookeeper:
+    image: bitnami/zookeeper:latest
+    container_name: fastapi-zookeeper
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: yes
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_SERVER_ID: 1
+      ZOOKEEPER_4LW_COMMANDS_WHITELIST: mntr,stat,ruok,conf
+    ports:
+      - "2182:2181"  # +1 from original 2181
+    networks:
+      - fastapi-network
+
+  # Zookeeper Exporter
+  fastapi-zookeeper-exporter:
+    image: dabealu/zookeeper-exporter:latest
+    container_name: fastapi-zookeeper-exporter
+    environment:
+      ZK_HOSTS: fastapi-zookeeper:2181
+    ports:
+      - "9142:9141"  # +1 from original 9141
+    depends_on:
+      - fastapi-zookeeper
+    networks:
+      - fastapi-network
+
+  # Kafka
+  fastapi-kafka:
+    image: bitnami/kafka:3.5.1
+    container_name: fastapi-kafka
+    depends_on:
+      - fastapi-zookeeper
+    ports:
+      - "9093:9092"  # +1 from original 9092
+    environment:
+      KAFKA_CFG_BROKER_ID: 1
+      KAFKA_CFG_ZOOKEEPER_CONNECT: fastapi-zookeeper:2181
+      KAFKA_CFG_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://fastapi-kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_NUM_PARTITIONS: 1
+      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_OPTS: "-javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent-0.20.0.jar=7070:/opt/jmx-exporter/config.yaml"
+    volumes:
+      - ./jmx-exporter:/opt/jmx-exporter
+    networks:
+      - fastapi-network
+
+  # Kafka JMX Exporter
+  fastapi-kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: fastapi-kafka-exporter
+    command: --kafka.server=fastapi-kafka:9092
+    ports:
+      - "9309:9308"  # +1 from original 9308
+    depends_on:
+      - fastapi-kafka
+    networks:
+      - fastapi-network
+
+  # MQTT Broker
+  fastapi-mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: fastapi-mosquitto
+    ports:
+      - "1884:1883"  # +1 from original 1883
+      - "9002:9001"  # +1 from original 9001
+    volumes:
+      - ./infrastructure/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - fastapi-mosquitto-data:/mosquitto/data
+    networks:
+      - fastapi-network
+
+  # MQTT Metrics Publisher
+  fastapi-mqtt-metrics-publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile.mqtt-publisher
+    container_name: fastapi-mqtt-metrics-publisher
+    depends_on:
+      - fastapi-mosquitto
+    networks:
+      - fastapi-network
+
+  # MQTT Exporter
+  fastapi-mqtt-exporter:
+    image: sapcc/mosquitto-exporter:latest
+    container_name: fastapi-mqtt-exporter
+    environment:
+      MQTT_ADDRESS: mqtt://fastapi-mosquitto:1883
+      MQTT_TOPIC: "metrics/#"
+    ports:
+      - "9642:9641"  # +1 from original 9641
+    depends_on:
+      - fastapi-mosquitto
+      - fastapi-mqtt-metrics-publisher
+    networks:
+      - fastapi-network
+
+  # Prometheus
+  fastapi-prometheus:
+    image: prom/prometheus:latest
+    container_name: fastapi-prometheus
+    ports:
+      - "9091:9090"  # +1 from original 9090
+    volumes:
+      - ./infrastructure/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    depends_on:
+      - fastapi-postgres-exporter
+      - fastapi-redis-exporter-1
+      - fastapi-redis-exporter-2
+      - fastapi-redis-exporter-3
+      - fastapi-rabbitmq
+      - fastapi-kafka-exporter
+      - fastapi-mqtt-exporter
+      - fastapi-zookeeper-exporter
+    networks:
+      - fastapi-network
+
+  # Grafana
+  fastapi-grafana:
+    image: grafana/grafana:latest
+    container_name: fastapi-grafana
+    ports:
+      - "3002:3000"  # +1 from original 3001
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - fastapi-prometheus
+    networks:
+      - fastapi-network
+
+volumes:
+  fastapi-postgres-primary-data:
+  fastapi-postgres-replica-data:
+  fastapi-mosquitto-data:
+
+networks:
+  fastapi-network:
+    driver: bridge
+    name: fastapi-network

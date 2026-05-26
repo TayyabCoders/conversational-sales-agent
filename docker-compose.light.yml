@@ -1,0 +1,118 @@
+services:
+  # =========================
+  # PostgreSQL (Primary only)
+  # =========================
+  fastapi-postgres-primary:
+    image: postgres:16
+    container_name: fastapi-postgres-primary3
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: "1234"
+      POSTGRES_DB: app_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - fastapi-postgres-primary-data:/var/lib/postgresql/data
+    networks:
+      - fastapi-network
+
+  # =========================
+  # Redis (Single node - Dev)
+  # =========================
+  fastapi-redis:
+    image: redis:7-alpine
+    container_name: fastapi-redis3
+    ports:
+      - "7004:6379"
+    volumes:
+      - fastapi-redis-data:/data
+    networks:
+      - fastapi-network
+  
+  # =========================
+  # Adminer
+  # =========================
+  adminer:
+    platform: linux/amd64
+    image: adminer:latest
+    restart: always
+    ports:
+      - "127.0.0.1:8085:8080"
+    depends_on:
+      - fastapi-postgres-primary
+    networks:
+      - fastapi-network
+
+  # =========================
+  # RabbitMQ
+  # =========================
+  fastapi-rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: fastapi-rabbitmq3
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    networks:
+      - fastapi-network
+
+  # =========================
+  # Zookeeper (Confluent)
+  # =========================
+  # fastapi-zookeeper:
+  #   image: confluentinc/cp-zookeeper:7.6.1
+  #   container_name: fastapi-zookeeper
+  #   ports:
+  #     - "2182:2181"
+  #   environment:
+  #     ZOOKEEPER_CLIENT_PORT: 2181
+  #     ZOOKEEPER_TICK_TIME: 2000
+  #   networks:
+  #     - fastapi-network
+
+  # =========================
+  # Kafka (Confluent – WORKING)
+  # =========================
+  # fastapi-kafka:
+  #   image: confluentinc/cp-kafka:7.6.1
+  #   container_name: fastapi-kafka
+  #   depends_on:
+  #     - fastapi-zookeeper
+  #   ports:
+  #     - "9193:9092"
+  #   environment:
+  #     KAFKA_BROKER_ID: 1
+  #     KAFKA_ZOOKEEPER_CONNECT: fastapi-zookeeper:2181
+  #     KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+  #     KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://fastapi-kafka:9092
+  #     KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+  #     KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+  #     KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+  #     KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+  #   networks:
+  #     - fastapi-network
+
+  # =========================
+  # Prometheus (Light)
+  # =========================
+  fastapi-prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: fastapi-prometheus3
+    ports:
+      - "9191:9090"
+    volumes:
+      - ./infrastructure/prometheus.light.yml:/etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    networks:
+      - fastapi-network
+
+volumes:
+  fastapi-postgres-primary-data:
+  fastapi-redis-data:
+
+networks:
+  fastapi-network:
+    driver: bridge

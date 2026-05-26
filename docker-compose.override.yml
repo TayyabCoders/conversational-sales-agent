@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # FastAPI Application (for development)
+  fastapi-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fastapi-app-dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - /app/venv  # Exclude virtual environment
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    depends_on:
+      - fastapi-postgres-primary
+      - fastapi-redis-node-1
+      - fastapi-rabbitmq
+      - fastapi-kafka
+    networks:
+      - fastapi-network
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload"
+      ]
+
+  # Redis Commander (Dev Tool)
+  fastapi-redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: fastapi-redis-commander
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:fastapi-redis-node-1:7000
+    depends_on:
+      - fastapi-redis-node-1
+    networks:
+      - fastapi-network
+
+  # Database management tool
+  fastapi-adminer:
+    image: adminer:latest
+    container_name: fastapi-adminer
+    ports:
+      - "8080:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=fastapi-postgres-primary
+    depends_on:
+      - fastapi-postgres-primary
+    networks:
+      - fastapi-network
+
+networks:
+  fastapi-network:
+    external: true

@@ -1,0 +1,41 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # FastAPI Application
+  - job_name: 'fastapi-app'
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # PostgreSQL (basic monitoring)
+  - job_name: 'fastapi-postgres'
+    static_configs:
+      - targets: ['fastapi-postgres-primary:5432']
+    scrape_interval: 30s
+
+  # Redis (basic monitoring)
+  - job_name: 'fastapi-redis'
+    static_configs:
+      - targets: ['fastapi-redis:6379']
+    scrape_interval: 15s
+
+  # RabbitMQ
+  - job_name: 'fastapi-rabbitmq'
+    static_configs:
+      - targets: ['fastapi-rabbitmq:15672']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Kafka
+  - job_name: 'fastapi-kafka'
+    static_configs:
+      - targets: ['fastapi-kafka:9092']
+    scrape_interval: 30s
