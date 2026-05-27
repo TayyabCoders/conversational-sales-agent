@@ -1,6 +1,9 @@
 from typing import Any
 
 from app.models.user_model import User
+from app.models.conversation_model import Conversation
+from app.models.message_model import Message
+from app.models.lead_model import Lead
 from app.models.base_model import Base
 
 
@@ -20,4 +23,4 @@ async def initialize_models(database: Any) -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-__all__ = ["User", "initialize_models"]
+__all__ = ["User", "Conversation", "Message", "Lead", "initialize_models"]
