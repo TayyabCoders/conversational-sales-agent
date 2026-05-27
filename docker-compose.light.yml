@@ -3,12 +3,12 @@ services:
   # PostgreSQL (Primary only)
   # =========================
   fastapi-postgres-primary:
-    image: postgres:16
-    container_name: fastapi-postgres-primary3
+    image: pgvector/pgvector:pg16
+    container_name: fastapi-postgres-primary4
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: "1234"
-      POSTGRES_DB: app_db
+      POSTGRES_DB: sales_agent_db
     ports:
       - "5433:5432"
     volumes:
@@ -21,7 +21,7 @@ services:
   # =========================
   fastapi-redis:
     image: redis:7-alpine
-    container_name: fastapi-redis3
+    container_name: fastapi-redis4
     ports:
       - "7004:6379"
     volumes:
@@ -48,7 +48,7 @@ services:
   # =========================
   fastapi-rabbitmq:
     image: rabbitmq:3.13-management
-    container_name: fastapi-rabbitmq3
+    container_name: fastapi-rabbitmq4
     ports:
       - "5673:5672"
       - "15673:15672"
@@ -99,7 +99,7 @@ services:
   # =========================
   fastapi-prometheus:
     image: prom/prometheus:v2.51.2
-    container_name: fastapi-prometheus3
+    container_name: fastapi-prometheus4
     ports:
       - "9191:9090"
     volumes:

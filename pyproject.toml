@@ -6,9 +6,9 @@ build-backend = "setuptools.build_meta"
 include = ["app*"]
 
 [project]
-name = "fastapi-boiler-plate"
+name = "conversation-sales-agent"
 version = "0.1.0"
-description = "Enterprise FastAPI application with clean architecture"
+description = "An enterprise-grade AI sales automation platform that enables businesses to deploy human-like AI agents"
 authors = [{name = "Your Name", email = "your.email@example.com"}]
 readme = "README.md"
 requires-python = ">=3.9"
