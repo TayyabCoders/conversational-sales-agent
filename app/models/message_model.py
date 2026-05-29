@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import String, Text, Integer, DateTime, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -29,6 +29,9 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text)
     
     media_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # text | image | audio | document
+    
+    media_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     
     tokens_used: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
@@ -44,3 +47,6 @@ class Message(Base):
         server_default=func.now(),
         onupdate=func.now()
     )
+    
+    # Relationship
+    conversation: Mapped["Conversation"] = relationship(back_populates="messages")

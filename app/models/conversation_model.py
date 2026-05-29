@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import String, DateTime, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import UUID, JSON
 
@@ -45,3 +45,6 @@ class Conversation(Base):
         server_default=func.now(),
         onupdate=func.now()
     )
+    
+    # Relationship
+    messages: Mapped[list] = relationship("Message", back_populates="conversation")
