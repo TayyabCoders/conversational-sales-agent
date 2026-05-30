@@ -268,6 +268,20 @@ def load_infrastructure():
             singleton=True
         )
 
+        from openai import AsyncOpenAI
+        container.register(
+            'openai_client',
+            lambda: AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
+            singleton=True
+        )
+
+        from qdrant_client import AsyncQdrantClient
+        container.register(
+            'qdrant_client',
+            lambda: AsyncQdrantClient(url=settings.QDRANT_URL),
+            singleton=True
+        )
+
         logger.info('✓ Infrastructure loaded')
 
     except Exception as e:

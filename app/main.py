@@ -22,32 +22,47 @@ async def lifespan(app: FastAPI):
     from app.di.container import container
     from app.models import initialize_models
     import structlog
-    
+    import asyncio
+
     logger = structlog.get_logger("lifespan")
-    
+
     # 1. Initialize Database Connection
     database = container.resolve('database')
     logger.info("Initializing database connection...")
     await database.connect()
-    
+
     # 1.1 Start WebSocket Connection Manager Background Tasks
     from app.edge.socket.connection_manager import manager
     await manager.start()
-    
+
     # 2. Initialize Models (create tables) - controlled by setting
     if settings.DB_AUTO_MIGRATE:
         logger.info("Initializing models (DB_AUTO_MIGRATE=True)...")
         await initialize_models(database)
     else:
         logger.info("Skipping model initialization (DB_AUTO_MIGRATE=False)")
-    
+
+    # 3. Connect RabbitMQ and start consumers
+    rabbitmq = container.resolve('rabbitmq')
+    logger.info("Connecting to RabbitMQ...")
+    await rabbitmq.connect()
+
+    from app.workers.ai_message_consumer import start_ai_message_consumer
+    from app.workers.knowledge_consumer import start_knowledge_consumer
+
+    # Start both consumers as background tasks (non-blocking)
+    asyncio.create_task(start_ai_message_consumer(rabbitmq))
+    asyncio.create_task(start_knowledge_consumer(rabbitmq))
+    logger.info("✓ RabbitMQ consumers started")
+
     logger.info("✓ Application startup complete")
-    
+
     yield
-    
-    # 3. Shutdown logic
+
+    # 4. Shutdown logic
     logger.info("Shutting down application...")
     await manager.stop()
+    await rabbitmq.disconnect()
     await database.disconnect()
     logger.info("✓ Application shutdown complete")
 
