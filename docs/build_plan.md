@@ -1,6 +1,6 @@
 # AI Sales Agent — Step-by-Step Build Plan
 > Flow: `schema → route → controller → mediator → service → repository`  
-> Stack: FastAPI Boilerplate · PostgreSQL · Redis · Qdrant · Celery · OpenAI
+> Stack: FastAPI Boilerplate · PostgreSQL · Redis · Qdrant · RabbitMQ · OpenAI
 
 ---
 
@@ -833,15 +833,19 @@ class MessageMediator:
             customer_phone=message.from_number,
         )
 
-        # 5. Queue Celery task — non-blocking
-        process_message_task.delay(
-            conversation_id=str(conversation.id),
-            lead_id=str(lead.id),
-            tenant_id=tenant_id,
-            message_text=message.text or "",
-            media_type=message.media_type,
-            media_id=message.media_id,
-            channel=channel,
+        # 5. Publish to RabbitMQ ai.messages queue — non-blocking
+        await self.rabbitmq.publish(
+            exchange   = "ai",
+            routing_key = "ai.messages",
+            message    = dict(
+                conversation_id = str(conversation.id),
+                lead_id         = str(lead.id),
+                tenant_id       = tenant_id,
+                message_text    = message.text or "",
+                media_type      = message.media_type,
+                media_id        = message.media_id,
+                channel         = channel,
+            ),
         )
 
         logger.info(f"Queued AI task for conversation {conversation.id}")
@@ -877,12 +881,16 @@ class KnowledgeMediator:
             file_url=file_url,
         )
 
-        # 3. Queue Celery indexing task
-        index_document_task.delay(
-            doc_id=str(doc.id),
-            tenant_id=tenant_id,
-            file_url=file_url,
-            file_type=file_type,
+        # 3. Publish to RabbitMQ indexing queue
+        await self.rabbitmq.publish(
+            exchange    = "ai",
+            routing_key = "ai.knowledge",
+            message     = dict(
+                doc_id    = str(doc.id),
+                tenant_id = tenant_id,
+                file_url  = file_url,
+                file_type = file_type,
+            ),
         )
 
         return doc
@@ -1559,42 +1567,44 @@ class KnowledgeRepository(BaseRepository[KnowledgeDoc]):
 
 ---
 
-## Step 8 — Celery Workers
+## Step 8 — RabbitMQ Workers
 
-### `app/workers/celery_app.py`
-```python
-from celery import Celery
-from app.configs.app_config import get_settings
+> You already have `RabbitMQClient` in `messaging_config.py`.  
+> We use it directly — no Celery needed. Two consumers run as long-lived async tasks:  
+> **`ai_message_consumer`** (processes customer messages) and **`knowledge_consumer`** (indexes documents).
 
-settings = get_settings()
+---
 
-celery_app = Celery(
-    "ai_sales_agent",
-    broker  = settings.CELERY_BROKER_URL,
-    backend = settings.CELERY_RESULT_BACKEND,
-    include = [
-        "app.workers.message_processor",
-        "app.workers.knowledge_indexer",
-    ],
-)
+### How it works
 
-celery_app.conf.update(
-    task_serializer          = "json",
-    result_serializer        = "json",
-    task_acks_late           = True,   # re-queue if worker crashes mid-task
-    worker_prefetch_multiplier = 1,    # one task at a time per worker
-    task_routes = {
-        "app.workers.message_processor.*": {"queue": "ai"},
-        "app.workers.knowledge_indexer.*":  {"queue": "indexing"},
-    },
-)
+```
+message_mediator.publish()
+      |
+      v
+RabbitMQ exchange: "ai"
+  ├── routing_key: "ai.messages"  →  ai_message_consumer  →  AI pipeline → WhatsApp
+  └── routing_key: "ai.knowledge" →  knowledge_consumer   →  embed + Qdrant
 ```
 
 ---
 
-### `app/workers/message_processor.py`
+### `app/workers/__init__.py`
 ```python
-from app.workers.celery_app import celery_app
+# empty — marks workers as a package
+```
+
+---
+
+### `app/workers/ai_message_consumer.py`
+```python
+"""
+Long-lived RabbitMQ consumer for AI message processing.
+Started inside FastAPI lifespan via asyncio.create_task().
+"""
+import asyncio
+import logging
+from app.configs.messaging_config import RabbitMQClient
+from app.configs.app_config import get_settings
 from app.services.ai.agent_service import AgentService
 from app.services.ai.rag_service import RAGService
 from app.services.ai.memory_service import MemoryService
@@ -1606,15 +1616,50 @@ from app.services.channels.whatsapp_channel import WhatsAppChannel
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.tenant_repository import TenantRepository
 from app.repositories.lead_repository import LeadRepository
-import asyncio
-import logging
 
-logger = logging.getLogger(__name__)
+logger   = logging.getLogger(__name__)
+settings = get_settings()
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=5)
-def process_message_task(
-    self,
+async def start_ai_message_consumer(rabbitmq: RabbitMQClient) -> None:
+    """
+    Bind to exchange="ai", routing_key="ai.messages".
+    Called once in main.py lifespan startup.
+    """
+    await rabbitmq.consume(
+        exchange     = "ai",
+        queue_name   = "ai.messages.queue",
+        routing_keys = ["ai.messages"],
+        callback     = handle_message,
+    )
+    logger.info("AI message consumer started — listening on ai.messages.queue")
+
+
+async def handle_message(payload: dict) -> None:
+    """
+    Called by RabbitMQClient for every message on ai.messages.queue.
+    payload keys: conversation_id, lead_id, tenant_id,
+                  message_text, media_type, media_id, channel
+    """
+    conversation_id = payload["conversation_id"]
+    lead_id         = payload["lead_id"]
+    tenant_id       = payload["tenant_id"]
+    message_text    = payload["message_text"]
+    media_type      = payload.get("media_type")
+    media_id        = payload.get("media_id")
+    channel         = payload["channel"]
+
+    try:
+        await _process(
+            conversation_id, lead_id, tenant_id,
+            message_text, media_type, media_id, channel,
+        )
+    except Exception as exc:
+        logger.error(f"AI message processing failed: {exc}", exc_info=True)
+        raise   # RabbitMQ will re-queue (message.process() context manager)
+
+
+async def _process(
     conversation_id: str,
     lead_id: str,
     tenant_id: str,
@@ -1622,62 +1667,52 @@ def process_message_task(
     media_type: str | None,
     media_id: str | None,
     channel: str,
-):
-    try:
-        asyncio.run(_process(
-            conversation_id, lead_id, tenant_id,
-            message_text, media_type, media_id, channel,
-        ))
-    except Exception as exc:
-        logger.error(f"AI task failed: {exc}")
-        raise self.retry(exc=exc)
+) -> None:
 
-
-async def _process(
-    conversation_id, lead_id, tenant_id,
-    message_text, media_type, media_id, channel,
-):
-    # --- Setup (DI container or direct init) ---
+    # --- Repositories ---
     tenant_repo = TenantRepository()
     conv_repo   = ConversationRepository()
     lead_repo   = LeadRepository()
 
-    tenant  = await tenant_repo.get_by_id(tenant_id)
+    tenant         = await tenant_repo.get_by_id(tenant_id)
     channel_client = WhatsAppChannel(
-        api_version = "v21.0",
-        app_secret  = "",
+        api_version = settings.WHATSAPP_API_VERSION,
+        app_secret  = settings.META_APP_SECRET,
     )
 
-    # --- Handle voice or image if present ---
+    # --- Handle voice or image if media present ---
     if media_type == "audio" and media_id:
-        audio_bytes = await channel_client.download_media(
-            media_id, access_token=tenant.whatsapp_access_token
-        )
+        audio_bytes  = await channel_client.download_media(media_id, access_token=tenant.whatsapp_access_token)
         message_text = await _transcribe_voice(audio_bytes)
 
     elif media_type == "image" and media_id:
-        image_bytes = await channel_client.download_media(
-            media_id, access_token=tenant.whatsapp_access_token
-        )
+        image_bytes  = await channel_client.download_media(media_id, access_token=tenant.whatsapp_access_token)
         message_text = await _describe_image(image_bytes, message_text)
 
-    # --- Run AI pipeline ---
-    agent = AgentService(
-        rag            = RAGService(...),
-        memory         = MemoryService(...),
-        prompt_builder = PromptBuilder(),
-        guardrails     = GuardrailsService(),
-        openai         = ...,
-    )
-
-    ai_config = tenant.ai_config or {}
-    ai_config["id"] = str(tenant.id)
-
-    # Check if customer asked for human escalation
+    # --- Check explicit escalation request ---
     guardrails = GuardrailsService()
     if guardrails.check_escalation_trigger(message_text):
-        await _escalate(conversation_id, tenant_id, conv_repo)
+        await _escalate(conversation_id, conv_repo)
         return
+
+    # --- AI pipeline ---
+    from openai import AsyncOpenAI
+    from qdrant_client import AsyncQdrantClient
+
+    agent = AgentService(
+        rag            = RAGService(
+                             qdrant     = AsyncQdrantClient(url=settings.QDRANT_URL),
+                             openai     = AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
+                             collection = settings.QDRANT_COLLECTION,
+                         ),
+        memory         = MemoryService(redis=..., window=settings.AI_MEMORY_WINDOW),
+        prompt_builder = PromptBuilder(),
+        guardrails     = guardrails,
+        openai         = AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
+    )
+
+    ai_config       = tenant.ai_config or {}
+    ai_config["id"] = str(tenant.id)
 
     response_text, confidence = await agent.process_message(
         conversation_id = conversation_id,
@@ -1685,21 +1720,20 @@ async def _process(
         message         = message_text,
     )
 
-    # Low confidence → escalate to human
-    threshold = ai_config.get("confidence_threshold", 0.75)
+    # --- Low confidence → escalate ---
+    threshold = ai_config.get("confidence_threshold", settings.AI_CONFIDENCE_THRESHOLD)
     if confidence < threshold:
-        await _escalate(conversation_id, tenant_id, conv_repo)
+        await _escalate(conversation_id, conv_repo)
         return
 
-    # Update lead score
+    # --- Update lead score ---
     scorer = LeadScorer(lead_repo)
     await scorer.update_from_message(lead_id, message_text)
 
-    # Human-like delay before sending
-    delay = calculate_typing_delay(response_text)
-    await asyncio.sleep(delay)
+    # --- Human-like delay ---
+    await asyncio.sleep(calculate_typing_delay(response_text))
 
-    # Send response
+    # --- Send via channel ---
     await channel_client.send_message(
         recipient       = tenant.customer_phone,
         message         = response_text,
@@ -1707,7 +1741,7 @@ async def _process(
         access_token    = tenant.whatsapp_access_token,
     )
 
-    # Persist AI response to DB
+    # --- Persist AI response ---
     await conv_repo.add_message(
         conversation_id = conversation_id,
         tenant_id       = tenant_id,
@@ -1715,13 +1749,12 @@ async def _process(
         content         = response_text,
     )
 
-    # Update usage counters
     await tenant_repo.update_usage(tenant_id, messages=1)
+    logger.info(f"AI response sent for conversation {conversation_id}")
 
 
-async def _escalate(conversation_id: str, tenant_id: str, conv_repo):
+async def _escalate(conversation_id: str, conv_repo: ConversationRepository) -> None:
     await conv_repo.update_status(conversation_id, "escalated")
-    # Phase 2: trigger notification_service to alert human agents
     logger.info(f"Conversation {conversation_id} escalated to human")
 
 
@@ -1738,12 +1771,12 @@ async def _transcribe_voice(audio_bytes: bytes) -> str:
 async def _describe_image(image_bytes: bytes, customer_text: str) -> str:
     import base64
     from openai import AsyncOpenAI
-    b64 = base64.b64encode(image_bytes).decode()
+    b64  = base64.b64encode(image_bytes).decode()
     resp = await AsyncOpenAI().chat.completions.create(
         model    = "gpt-4o",
         messages = [{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            {"type": "text", "text": customer_text or "What is in this image?"},
+            {"type": "text",      "text": customer_text or "What is in this image?"},
         ]}],
         max_tokens = 500,
     )
@@ -1752,26 +1785,59 @@ async def _describe_image(image_bytes: bytes, customer_text: str) -> str:
 
 ---
 
-### `app/workers/knowledge_indexer.py`
+### `app/workers/knowledge_consumer.py`
 ```python
-from app.workers.celery_app import celery_app
+"""
+Long-lived RabbitMQ consumer for document indexing.
+Started inside FastAPI lifespan via asyncio.create_task().
+"""
+import asyncio
+import logging
+import uuid
+import httpx
+import io
+from app.configs.messaging_config import RabbitMQClient
 from app.repositories.knowledge_repository import KnowledgeRepository
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import PointStruct
 from openai import AsyncOpenAI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-import asyncio, uuid, httpx, io
-import logging
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(queue="indexing")
-def index_document_task(doc_id: str, tenant_id: str, file_url: str, file_type: str):
-    asyncio.run(_index(doc_id, tenant_id, file_url, file_type))
+async def start_knowledge_consumer(rabbitmq: RabbitMQClient) -> None:
+    """
+    Bind to exchange="ai", routing_key="ai.knowledge".
+    Called once in main.py lifespan startup.
+    """
+    await rabbitmq.consume(
+        exchange     = "ai",
+        queue_name   = "ai.knowledge.queue",
+        routing_keys = ["ai.knowledge"],
+        callback     = handle_index_request,
+    )
+    logger.info("Knowledge consumer started — listening on ai.knowledge.queue")
 
 
-async def _index(doc_id: str, tenant_id: str, file_url: str, file_type: str):
+async def handle_index_request(payload: dict) -> None:
+    """
+    Called by RabbitMQClient for every message on ai.knowledge.queue.
+    payload keys: doc_id, tenant_id, file_url, file_type
+    """
+    try:
+        await _index(
+            doc_id    = payload["doc_id"],
+            tenant_id = payload["tenant_id"],
+            file_url  = payload["file_url"],
+            file_type = payload["file_type"],
+        )
+    except Exception as exc:
+        logger.error(f"Knowledge indexing failed: {exc}", exc_info=True)
+        raise
+
+
+async def _index(doc_id: str, tenant_id: str, file_url: str, file_type: str) -> None:
     repo = KnowledgeRepository()
 
     try:
@@ -1782,26 +1848,29 @@ async def _index(doc_id: str, tenant_id: str, file_url: str, file_type: str):
             resp    = await client.get(file_url)
             content = resp.content
 
-        # 2. Extract text
+        # 2. Extract text based on file type
         text = _extract_text(content, file_type)
 
-        # 3. Chunk text
+        # 3. Chunk with overlap
         splitter = RecursiveCharacterTextSplitter(
             chunk_size    = 500,
             chunk_overlap = 50,
-            separators    = ["\n\n", "\n", ". ", " "],
+            separators    = ["
+
+", "
+", ". ", " "],
         )
         chunks = splitter.split_text(text)
 
-        # 4. Embed all chunks in one API call
-        openai = AsyncOpenAI()
+        # 4. Embed all chunks in single API call
+        openai     = AsyncOpenAI()
         embed_resp = await openai.embeddings.create(
             model = "text-embedding-3-small",
             input = chunks,
         )
         vectors = [e.embedding for e in embed_resp.data]
 
-        # 5. Upsert into Qdrant with tenant_id filter
+        # 5. Upsert into Qdrant filtered by tenant_id
         qdrant = AsyncQdrantClient()
         points = [
             PointStruct(
@@ -1817,13 +1886,13 @@ async def _index(doc_id: str, tenant_id: str, file_url: str, file_type: str):
         ]
         await qdrant.upsert(collection_name="knowledge_base", points=points)
 
-        # 6. Mark as indexed
+        # 6. Mark as indexed in PostgreSQL
         await repo.update_status(doc_id, "indexed", chunk_count=len(chunks))
         logger.info(f"Indexed {len(chunks)} chunks for doc {doc_id}")
 
-    except Exception as e:
+    except Exception as exc:
         await repo.update_status(doc_id, "failed")
-        logger.error(f"Indexing failed for doc {doc_id}: {e}")
+        logger.error(f"Indexing failed for doc {doc_id}: {exc}")
         raise
 
 
@@ -1831,15 +1900,89 @@ def _extract_text(content: bytes, file_type: str) -> str:
     if file_type == "pdf":
         import pypdf2
         reader = pypdf2.PdfReader(io.BytesIO(content))
-        return "\n".join(page.extract_text() for page in reader.pages)
-
+        return "
+".join(page.extract_text() for page in reader.pages)
     elif file_type == "docx":
         from docx import Document
         doc = Document(io.BytesIO(content))
-        return "\n".join(para.text for para in doc.paragraphs)
-
+        return "
+".join(para.text for para in doc.paragraphs)
     else:
         return content.decode("utf-8", errors="ignore")
+```
+
+---
+
+### Update `message_mediator.py` — inject RabbitMQClient
+```python
+# app/mediator/message_mediator.py  — update __init__ and handle_inbound
+
+from app.configs.messaging_config import RabbitMQClient   # ADD
+
+class MessageMediator:
+    def __init__(
+        self,
+        conversation_repo: ConversationRepository,
+        tenant_repo: TenantRepository,
+        lead_repo: LeadRepository,
+        rabbitmq: RabbitMQClient,                         # ADD
+    ):
+        self.conv_repo   = conversation_repo
+        self.tenant_repo = tenant_repo
+        self.lead_repo   = lead_repo
+        self.rabbitmq    = rabbitmq                       # ADD
+
+    async def handle_inbound(self, tenant_id, message, channel):
+        # ... (steps 1-4 unchanged) ...
+
+        # Step 5 — publish to RabbitMQ (was: Celery .delay())
+        await self.rabbitmq.publish(
+            exchange    = "ai",
+            routing_key = "ai.messages",
+            message     = dict(
+                conversation_id = str(conversation.id),
+                lead_id         = str(lead.id),
+                tenant_id       = tenant_id,
+                message_text    = message.text or "",
+                media_type      = message.media_type,
+                media_id        = message.media_id,
+                channel         = channel,
+            ),
+        )
+```
+
+---
+
+### Update `knowledge_mediator.py` — inject RabbitMQClient
+```python
+# app/mediator/knowledge_mediator.py  — update __init__ and ingest_document
+
+from app.configs.messaging_config import RabbitMQClient   # ADD
+
+class KnowledgeMediator:
+    def __init__(
+        self,
+        knowledge_repo: KnowledgeRepository,
+        rabbitmq: RabbitMQClient,                         # ADD
+    ):
+        self.repo     = knowledge_repo
+        self.rabbitmq = rabbitmq                          # ADD
+
+    async def ingest_document(self, tenant_id, file, file_type):
+        # ... (steps 1-2 unchanged) ...
+
+        # Step 3 — publish to RabbitMQ (was: Celery .delay())
+        await self.rabbitmq.publish(
+            exchange    = "ai",
+            routing_key = "ai.knowledge",
+            message     = dict(
+                doc_id    = str(doc.id),
+                tenant_id = tenant_id,
+                file_url  = file_url,
+                file_type = file_type,
+            ),
+        )
+        return doc
 ```
 
 ---
@@ -1883,6 +2026,7 @@ def verify_whatsapp_signature(body: bytes, signature_header: str) -> None:
 
 from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient
+from app.configs.messaging_config import RabbitMQClient
 from app.services.ai.agent_service import AgentService
 from app.services.ai.rag_service import RAGService
 from app.services.ai.memory_service import MemoryService
@@ -1902,6 +2046,16 @@ from app.edge.http.controller.lead_controller import LeadController
 
 
 # --- Inside your Container class ---
+
+# RabbitMQ (your existing messaging_config.py)
+rabbitmq = providers.Singleton(
+    RabbitMQClient,
+    host         = config.RABBITMQ_HOST,
+    port         = config.RABBITMQ_PORT,
+    username     = config.RABBITMQ_USERNAME,
+    password     = config.RABBITMQ_PASSWORD,
+    virtual_host = config.RABBITMQ_VIRTUAL_HOST,
+)
 
 # AI clients
 openai_client = providers.Singleton(AsyncOpenAI, api_key=config.OPENAI_API_KEY)
@@ -1927,8 +2081,10 @@ knowledge_repo    = providers.Factory(KnowledgeRepository, db=db_session)
 
 # Mediators
 message_mediator  = providers.Factory(MessageMediator, conversation_repo=conversation_repo,
-                                       tenant_repo=tenant_repo, lead_repo=lead_repo)
-knowledge_mediator = providers.Factory(KnowledgeMediator, knowledge_repo=knowledge_repo)
+                                       tenant_repo=tenant_repo, lead_repo=lead_repo,
+                                       rabbitmq=rabbitmq)
+knowledge_mediator = providers.Factory(KnowledgeMediator, knowledge_repo=knowledge_repo,
+                                        rabbitmq=rabbitmq)
 
 # Controllers
 webhook_controller      = providers.Factory(WebhookController, message_mediator=message_mediator,
@@ -1946,13 +2102,17 @@ lead_controller         = providers.Factory(LeadController, lead_repo=lead_repo)
 ### `app/main.py` (extend existing)
 ```python
 from contextlib import asynccontextmanager
+import asyncio
 from fastapi import FastAPI
+from app.di.container import Container
 from app.edge.http.routes import (
     webhook_route,
     conversation_route,
     knowledge_route,
     lead_route,
 )
+from app.workers.ai_message_consumer import start_ai_message_consumer
+from app.workers.knowledge_consumer import start_knowledge_consumer
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams
 from app.configs.app_config import get_settings
@@ -1964,16 +2124,29 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     # --- Your existing startup code ---
 
-    # --- New: Initialize Qdrant collection ---
-    qdrant = AsyncQdrantClient(url=settings.QDRANT_URL)
+    # --- New 1: Initialize Qdrant collection ---
+    qdrant      = AsyncQdrantClient(url=settings.QDRANT_URL)
     collections = await qdrant.get_collections()
-    names = [c.name for c in collections.collections]
+    names       = [c.name for c in collections.collections]
     if settings.QDRANT_COLLECTION not in names:
         await qdrant.create_collection(
             collection_name = settings.QDRANT_COLLECTION,
             vectors_config  = VectorParams(size=1536, distance=Distance.COSINE),
         )
+
+    # --- New 2: Connect RabbitMQ and start consumers ---
+    container = Container()
+    rabbitmq  = container.rabbitmq()
+    await rabbitmq.connect()
+
+    # Start both consumers as background tasks (non-blocking)
+    asyncio.create_task(start_ai_message_consumer(rabbitmq))
+    asyncio.create_task(start_knowledge_consumer(rabbitmq))
+
     yield
+
+    # --- Shutdown: disconnect RabbitMQ ---
+    await rabbitmq.disconnect()
     # --- Your existing shutdown code ---
 
 
@@ -1995,29 +2168,12 @@ app.include_router(lead_route.router,         prefix="/api/v1")
 
 ## Step 12 — Docker Compose Extension
 
+> RabbitMQ is already in your `docker-compose.yml` via `messaging_config.py`.  
+> Only add **Qdrant** — no new worker containers needed.  
+> Consumers start automatically inside the FastAPI process via `lifespan`.
+
 ### `docker-compose.yml` (append to existing services)
 ```yaml
-  celery-worker:
-    build: .
-    command: celery -A app.workers.celery_app worker -Q ai -l info -c 4
-    env_file: .env
-    environment:
-      - QDRANT_URL=http://qdrant:6333
-    depends_on: [db, redis, qdrant]
-    restart: unless-stopped
-
-  celery-indexer:
-    build: .
-    command: celery -A app.workers.celery_app worker -Q indexing -l info -c 2
-    env_file: .env
-    depends_on: [db, redis, qdrant]
-
-  celery-beat:
-    build: .
-    command: celery -A app.workers.celery_app beat -l info
-    env_file: .env
-    depends_on: [redis]
-
   qdrant:
     image: qdrant/qdrant:latest
     ports:
@@ -2026,16 +2182,12 @@ app.include_router(lead_route.router,         prefix="/api/v1")
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
 
-  flower:
-    image: mher/flower
-    command: celery --broker=${CELERY_BROKER_URL} flower
-    ports:
-      - "5555:5555"
-    depends_on: [redis]
-
 volumes:
   qdrant_data:
 ```
+
+> That's it. No celery-worker, no celery-beat, no flower.  
+> Workers live inside the FastAPI app — started in `main.py` lifespan.
 
 ---
 
@@ -2057,9 +2209,12 @@ AI_CONFIDENCE_THRESHOLD=0.75
 QDRANT_URL=http://localhost:6333
 QDRANT_COLLECTION=knowledge_base
 
-# Celery
-CELERY_BROKER_URL=redis://localhost:6379/1
-CELERY_RESULT_BACKEND=redis://localhost:6379/2
+# RabbitMQ (already in your .env — just confirm these exist)
+RABBITMQ_HOST=localhost
+RABBITMQ_PORT=5672
+RABBITMQ_USERNAME=admin
+RABBITMQ_PASSWORD=admin
+RABBITMQ_VIRTUAL_HOST=/
 
 # Meta / WhatsApp
 META_APP_SECRET=your-meta-app-secret
@@ -2077,8 +2232,8 @@ qdrant-client>=1.11.0
 langchain>=0.3.0
 langchain-openai>=0.2.0
 langchain-community>=0.3.0
-celery[redis]>=5.4.0
-flower>=2.0.0
+aio_pika>=9.4.0        # RabbitMQ async client (already in your project)
+# No Celery needed — workers run inside FastAPI via lifespan
 pypdf2>=3.0.0
 python-docx>=1.1.0
 tiktoken>=0.7.0
@@ -2108,12 +2263,12 @@ Week 3
   [ ] Step 7  — Create all repositories
 
 Week 4
-  [ ] Step 8  — Create Celery workers (celery_app + message_processor + knowledge_indexer)
+  [ ] Step 8  — Create RabbitMQ workers (ai_message_consumer + knowledge_consumer)
   [ ] Step 9  — Extend security_util.py
   [ ] Step 10 — Extend DI container
   [ ] Step 11 — Register routes in main.py
   [ ] Step 12 — Extend docker-compose.yml
-  [ ] Test end-to-end: POST webhook → Celery → AI → WhatsApp response
+  [ ] Test end-to-end: POST webhook → RabbitMQ → AI consumer → WhatsApp response
 ```
 
 ---
@@ -2232,7 +2387,7 @@ async def websocket_chat(websocket: WebSocket, tenant_slug: str):
             # Get tenant config by slug
             tenant_config = await get_tenant_config_by_slug(tenant_slug)
 
-            # Run AI inline (no Celery for WebSocket — needs real-time response)
+            # Run AI inline (no RabbitMQ for WebSocket — needs real-time response)
             agent = AgentService(...)
             response, _ = await agent.process_message(
                 conversation_id = session_id,
