@@ -144,17 +144,33 @@ async def _process(
     # --- Human-like delay ---
     await asyncio.sleep(calculate_typing_delay(response_text))
 
-    # --- Send via channel ---
-    # Note: WhatsApp sending requires tenant-specific credentials, skipped for now
-    logger.info(f"AI response generated for conversation {conversation_id} - sending skipped (tenant logic excluded)")
-    # await channel_client.send_message(
-    #     recipient       = tenant.customer_phone,
-    #     message         = response_text,
-    #     phone_number_id = tenant.whatsapp_phone_id,
-    #     access_token    = tenant.whatsapp_access_token,
-    # )
+    # --- Send via WhatsApp ---
+    # Get customer phone number from conversation
+    conversation = await conv_repo.get_by_id(conversation_id)
+    if not conversation:
+        logger.error(f"Conversation {conversation_id} not found, cannot send response")
+        return
 
-    # --- Persist AI response ---
+    customer_phone = conversation.customer_phone
+
+    # Check if WhatsApp credentials are configured
+    if not settings.WHATSAPP_PHONE_NUMBER_ID or not settings.WHATSAPP_ACCESS_TOKEN:
+        logger.warning(f"WhatsApp credentials not configured, skipping message send to {customer_phone}")
+        raise ValueError("WhatsApp credentials not configured")
+
+    try:
+        await channel_client.send_message(
+            recipient=customer_phone,
+            message=response_text,
+            phone_number_id=settings.WHATSAPP_PHONE_NUMBER_ID,
+            access_token=settings.WHATSAPP_ACCESS_TOKEN,
+        )
+        logger.info(f"WhatsApp message sent successfully to {customer_phone}")
+    except Exception as e:
+        logger.error(f"Failed to send WhatsApp message to {customer_phone}: {e}", exc_info=True)
+        raise  # Re-raise to trigger RabbitMQ retry/DLQ
+
+    # --- Persist AI response (only after successful send) ---
     await conv_repo.add_message(
         conversation_id = conversation_id,
         role            = "assistant",

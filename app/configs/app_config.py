@@ -104,6 +104,8 @@ class Settings(BaseSettings):
     # Meta / WhatsApp
     META_APP_SECRET: Optional[str] = Field(default=None, env="META_APP_SECRET")
     WHATSAPP_API_VERSION: str = Field(default="v21.0", env="WHATSAPP_API_VERSION")
+    WHATSAPP_PHONE_NUMBER_ID: Optional[str] = Field(default=None, env="WHATSAPP_PHONE_NUMBER_ID")
+    WHATSAPP_ACCESS_TOKEN: Optional[str] = Field(default=None, env="WHATSAPP_ACCESS_TOKEN")
     
     class Config:
         env_file = ".env"
