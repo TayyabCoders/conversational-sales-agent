@@ -88,9 +88,24 @@ class Settings(BaseSettings):
     # Prometheus
     PROMETHEUS_ENABLED: bool = Field(default=True, env="PROMETHEUS_ENABLED")
     PROMETHEUS_PORT: int = Field(default=9091, env="PROMETHEUS_PORT")
-    
+
     # Metrics
     ENABLE_METRICS: bool = Field(default=True, env="ENABLE_METRICS")
+
+    # AI
+    OPENAI_API_KEY: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
+    OPENAI_MODEL: str = Field(default="gpt-4o", env="OPENAI_MODEL")
+    OPENAI_EMBEDDING_MODEL: str = Field(default="text-embedding-3-small", env="OPENAI_EMBEDDING_MODEL")
+    AI_TEMPERATURE: float = Field(default=0.7, env="AI_TEMPERATURE")
+    AI_MAX_TOKENS: int = Field(default=800, env="AI_MAX_TOKENS")
+    AI_MEMORY_WINDOW: int = Field(default=20, env="AI_MEMORY_WINDOW")
+    AI_CONFIDENCE_THRESHOLD: float = Field(default=0.75, env="AI_CONFIDENCE_THRESHOLD")
+
+    # Meta / WhatsApp
+    META_APP_SECRET: Optional[str] = Field(default=None, env="META_APP_SECRET")
+    WHATSAPP_API_VERSION: str = Field(default="v21.0", env="WHATSAPP_API_VERSION")
+    WHATSAPP_PHONE_NUMBER_ID: Optional[str] = Field(default=None, env="WHATSAPP_PHONE_NUMBER_ID")
+    WHATSAPP_ACCESS_TOKEN: Optional[str] = Field(default=None, env="WHATSAPP_ACCESS_TOKEN")
     
     class Config:
         env_file = ".env"

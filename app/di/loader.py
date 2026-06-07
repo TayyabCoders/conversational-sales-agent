@@ -268,6 +268,13 @@ def load_infrastructure():
             singleton=True
         )
 
+        from openai import AsyncOpenAI
+        container.register(
+            'openai_client',
+            lambda: AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
+            singleton=True
+        )
+
         logger.info('✓ Infrastructure loaded')
 
     except Exception as e:

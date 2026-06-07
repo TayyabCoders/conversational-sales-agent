@@ -1,7 +1,10 @@
+import hmac
+import hashlib
 from datetime import datetime, timedelta
 from typing import Any, Union
 from jose import jwt
 from passlib.context import CryptContext
+from fastapi import HTTPException
 from app.configs.app_config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -60,4 +63,21 @@ def verify_password_reset_token(token: str) -> Union[str, None]:
     if payload and payload.get("type") == "password_reset":
         return payload.get("sub")
     return None
+
+
+def verify_whatsapp_signature(body: bytes, signature_header: str) -> None:
+    """Verify Meta HMAC-SHA256 webhook signature. Raises 403 if invalid."""
+    if not signature_header.startswith("sha256="):
+        raise HTTPException(403, "Missing or invalid webhook signature")
+
+    expected = hmac.new(
+        settings.META_APP_SECRET.encode(),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    received = signature_header.split("sha256=", 1)[1]
+
+    if not hmac.compare_digest(expected, received):
+        raise HTTPException(403, "Webhook signature mismatch")
 
