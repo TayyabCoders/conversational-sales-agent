@@ -22,9 +22,11 @@ class Conversation(Base):
     channel: Mapped[str] = mapped_column(String(50))  # whatsapp|instagram|fb|web
     
     customer_phone: Mapped[str] = mapped_column(String(50), index=True)
-    
+
     customer_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    
+
+    customer_email: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
     status: Mapped[str] = mapped_column(String(50), default="active")
     # active | escalated | resolved | closed
     

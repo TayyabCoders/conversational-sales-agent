@@ -96,13 +96,16 @@ async def _process(
 
     # --- AI pipeline ---
     from openai import AsyncOpenAI
-    from qdrant_client import AsyncQdrantClient
+    from app.di.container import container
+
+    # Use read session for RAG (will use replica if available)
+    db = container.resolve('database')
+    db_session = db.get_session("read")
 
     agent = AgentService(
         rag            = RAGService(
-                             qdrant     = AsyncQdrantClient(url=settings.QDRANT_URL),
-                             openai     = AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
-                             collection = settings.QDRANT_COLLECTION,
+                             db     = db_session,
+                             openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
                          ),
         memory         = MemoryService(redis=..., window=settings.AI_MEMORY_WINDOW),
         prompt_builder = PromptBuilder(),

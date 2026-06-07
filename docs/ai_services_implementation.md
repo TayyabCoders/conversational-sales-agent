@@ -178,50 +178,69 @@ Create new file with RAG service:
 ```python
 from app.di.container import container
 from dependency_injector.wiring import inject, Provide
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue
 from openai import AsyncOpenAI
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 from structlog import get_logger
 
 logger = get_logger(__name__)
 
 
 class RAGService:
+    """
+    Retrieval-Augmented Generation using PostgreSQL + pgvector.
+    Uses your existing Database class (read session → replica if available).
+    """
     @inject
     def __init__(
         self,
-        qdrant = Provide["qdrant_client"],
+        db = Provide["database"],
         openai = Provide["openai_client"],
     ):
-        self.qdrant = qdrant
+        self.db = db
         self.openai = openai
-        self.collection = "knowledge_chunks"
 
     async def retrieve(self, query: str, top_k: int = 5) -> str:
         try:
             logger.info("RAGService: Retrieving knowledge...")
 
-            # 1. Embed the query
+            # 1. Embed the query using OpenAI
             embed_resp = await self.openai.embeddings.create(
-                model="text-embedding-3-small",
-                input=query,
+                model = "text-embedding-3-small",
+                input = query,
             )
             query_vector = embed_resp.data[0].embedding
+            # Convert to pgvector literal string e.g. "[0.1, 0.2, ...]"
+            vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
 
-            # 2. Search Qdrant — no tenant filter (tenant logic excluded)
-            results = await self.qdrant.search(
-                collection_name=self.collection,
-                query_vector=query_vector,
-                limit=top_k,
-                score_threshold=0.72,
-            )
+            # 2. Cosine similarity search — no tenant filter (tenant logic excluded)
+            # <=> operator = cosine distance (lower = more similar)
+            sql = text("""
+                SELECT content,
+                       1 - (embedding <=> :query_vec::vector) AS similarity
+                FROM   knowledge_chunks
+                WHERE  1 - (embedding <=> :query_vec::vector) > 0.72
+                ORDER  BY embedding <=> :query_vec::vector
+                LIMIT  :top_k
+            """)
 
-            if not results:
+            # Use read session for RAG (will use replica if available)
+            async with self.db.get_session("read") as session:
+                result = await session.execute(
+                    sql,
+                    {
+                        "query_vec": vector_str,
+                        "top_k":     top_k,
+                    },
+                )
+                rows = result.fetchall()
+
+            if not rows:
                 logger.info("RAGService: No relevant knowledge found.")
                 return "No relevant knowledge found for this query."
 
-            # 3. Format as numbered context
-            chunks = [f"[{i+1}] {r.payload['content']}" for i, r in enumerate(results)]
+            # 3. Format as numbered context string
+            chunks = [f"[{i+1}] {row.content}" for i, row in enumerate(rows)]
             context = "\n\n".join(chunks)
 
             logger.info(f"RAGService: Retrieved {len(chunks)} knowledge chunks.")
@@ -230,12 +249,26 @@ class RAGService:
         except Exception as e:
             logger.error("RAGService: Failed to retrieve knowledge.", exc_info=True)
             raise e
+
+    async def embed_text(self, text_input: str) -> list[float]:
+        """Embed a single string — used by knowledge_consumer."""
+        try:
+            resp = await self.openai.embeddings.create(
+                model = "text-embedding-3-small",
+                input = text_input,
+            )
+            return resp.data[0].embedding
+        except Exception as e:
+            logger.error("RAGService: Failed to embed text.", exc_info=True)
+            raise e
 ```
 
 **Changes from build plan:**
-- Removed `tenant_id` parameter from `retrieve` method (tenant logic excluded)
-- Removed `collection` parameter (hardcoded in __init__)
-- Removed tenant filter from Qdrant search (tenant logic excluded)
+- Changed from Qdrant to PostgreSQL + pgvector
+- Uses db session with read operation (replica if available)
+- Uses SQL with pgvector cosine similarity search (<=> operator)
+- Removed `tenant_id` parameter (tenant logic excluded)
+- Added `embed_text` method for knowledge_consumer
 - Added `@inject` decorator on `__init__` following project pattern
 - Added try/except blocks with logging following project pattern
 - Changed from `logging` to `structlog`

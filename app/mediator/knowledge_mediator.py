@@ -1,7 +1,6 @@
 from app.di.container import container
 from dependency_injector.wiring import inject, Provide
 from fastapi import UploadFile
-from app.repositories.knowledge_repository import KnowledgeRepository
 from app.configs.messaging_config import RabbitMQClient
 from app.utils.storage_util import upload_to_s3
 from structlog import get_logger
@@ -13,10 +12,10 @@ class KnowledgeMediator:
     @inject
     def __init__(
         self,
-        knowledge_repo = Provide["knowledge_repository"],
+        knowledge_service = Provide["knowledge_service"],
         rabbitmq = Provide["rabbitmq"],
     ):
-        self.repo = knowledge_repo
+        self.knowledge_service = knowledge_service
         self.rabbitmq = rabbitmq
 
     async def ingest_document(self, file: UploadFile, file_type: str):
@@ -27,8 +26,8 @@ class KnowledgeMediator:
             file_bytes = await file.read()
             file_url = await upload_to_s3(file_bytes, file.filename)
 
-            # 2. Create DB record (status=pending)
-            doc = await self.repo.create(
+            # 2. Create DB record (status=pending) via service
+            doc = await self.knowledge_service.create_document(
                 filename=file.filename,
                 file_type=file_type,
                 file_url=file_url,
@@ -56,11 +55,7 @@ class KnowledgeMediator:
         try:
             logger.info(f"KnowledgeMediator: Deleting document {doc_id}...")
 
-            doc = await self.repo.get_by_id(doc_id)
-            # Remove from Qdrant (by doc_id metadata filter)
-            await self.repo.delete_qdrant_chunks(doc_id)
-            # Delete DB record
-            await self.repo.delete(doc_id)
+            await self.knowledge_service.delete_document(doc_id)
 
             logger.info(f"KnowledgeMediator: Document {doc_id} deleted successfully.")
 
@@ -72,8 +67,8 @@ class KnowledgeMediator:
         try:
             logger.info(f"KnowledgeMediator: Reindexing document {doc_id}...")
 
-            doc = await self.repo.get_by_id(doc_id)
-            await self.repo.update_status(doc_id, "pending")
+            doc = await self.knowledge_service.get_document(doc_id)
+            await self.knowledge_service.update_document_status(doc_id, "pending")
             await self.rabbitmq.publish(
                 exchange    = "ai",
                 routing_key = "ai.knowledge",
@@ -88,4 +83,17 @@ class KnowledgeMediator:
 
         except Exception as e:
             logger.error(f"KnowledgeMediator: Failed to reindex document {doc_id}.", exc_info=True)
+            raise e
+
+    async def list_documents(self):
+        try:
+            logger.info("KnowledgeMediator: Listing documents...")
+
+            docs = await self.knowledge_service.list_documents()
+
+            logger.info("KnowledgeMediator: Documents listed successfully.")
+            return docs
+
+        except Exception as e:
+            logger.error("KnowledgeMediator: Failed to list documents.", exc_info=True)
             raise e
