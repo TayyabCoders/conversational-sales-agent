@@ -8,11 +8,12 @@ import uuid
 import httpx
 import io
 from app.configs.messaging_config import RabbitMQClient
+from app.configs.database_config import Database
 from app.repositories.knowledge_repository import KnowledgeRepository
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import PointStruct
+from app.services.ai.rag_service import RAGService
 from openai import AsyncOpenAI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from sqlalchemy import text
 from structlog import get_logger
 
 logger = get_logger(__name__)
@@ -70,28 +71,38 @@ async def _index(doc_id: str, file_url: str, file_type: str) -> None:
         )
         chunks = splitter.split_text(text)
 
-        # 4. Embed all chunks in single API call
-        openai     = AsyncOpenAI()
-        embed_resp = await openai.embeddings.create(
-            model = "text-embedding-3-small",
-            input = chunks,
-        )
-        vectors = [e.embedding for e in embed_resp.data]
-
-        # 5. Upsert into Qdrant (tenant logic excluded - no tenant_id filter)
-        qdrant = AsyncQdrantClient()
-        points = [
-            PointStruct(
-                id      = str(uuid.uuid4()),
-                vector  = vec,
-                payload = {
-                    "doc_id":    doc_id,
-                    "content":   chunk,
-                },
+        # 4. Embed all chunks using OpenAI directly
+        from app.di.container import container
+        db = container.resolve('database')
+        openai = container.resolve('openai_client')
+        
+        vectors = []
+        for chunk in chunks:
+            embed_resp = await openai.embeddings.create(
+                model="text-embedding-3-small",
+                input=chunk,
             )
-            for chunk, vec in zip(chunks, vectors)
-        ]
-        await qdrant.upsert(collection_name="knowledge_base", points=points)
+            vectors.append(embed_resp.data[0].embedding)
+
+        # 5. Insert chunks + vectors into PostgreSQL (pgvector)
+        async with db.get_session("write") as session:
+            for chunk, vec in zip(chunks, vectors):
+                vector_str = "[" + ",".join(str(v) for v in vec) + "]"
+                await session.execute(
+                    text("""
+                        INSERT INTO knowledge_chunks
+                            (id, doc_id, content, embedding, created_at)
+                        VALUES
+                            (:id, :doc_id, :content, :embedding::vector, NOW())
+                    """),
+                    {
+                        "id":        str(uuid.uuid4()),
+                        "doc_id":    doc_id,
+                        "content":   chunk,
+                        "embedding": vector_str,
+                    },
+                )
+            await session.commit()
 
         # 6. Mark as indexed in PostgreSQL
         await repo.update_status(doc_id, "indexed", chunk_count=len(chunks))

@@ -1,5 +1,5 @@
-from app.repositories.lead_repository import LeadRepository
-from fastapi import HTTPException
+from app.di.container import container
+from dependency_injector.wiring import inject, Provide
 from structlog import get_logger
 
 logger = get_logger(__name__)
@@ -7,17 +7,19 @@ logger = get_logger(__name__)
 
 class LeadController:
     @inject
-    def __init__(self, lead_repo = Provide["lead_repository"]):
-        self.repo = lead_repo
+    def __init__(self, lead_mediator = Provide["lead_mediator"]):
+        self.lead_mediator = lead_mediator
 
     async def list_leads(self, stage, limit, offset):
         try:
             logger.info("LeadController: Listing leads...")
 
-            leads = await self.repo.list_all(stage=stage, limit=limit, offset=offset)
+            result = await self.lead_mediator.list_leads(
+                stage=stage, limit=limit, offset=offset
+            )
 
             logger.info("LeadController: Leads listed successfully.")
-            return {"data": leads, "total": len(leads)}
+            return result
 
         except Exception as e:
             logger.error("LeadController: Failed to list leads.", exc_info=True)
@@ -27,15 +29,11 @@ class LeadController:
         try:
             logger.info(f"LeadController: Getting lead {lead_id}...")
 
-            lead = await self.repo.get_by_id(lead_id)
-            if not lead:
-                raise HTTPException(404, "Lead not found")
+            result = await self.lead_mediator.get_lead(lead_id)
 
             logger.info(f"LeadController: Lead {lead_id} retrieved successfully.")
-            return lead
+            return result
 
-        except HTTPException:
-            raise
         except Exception as e:
             logger.error(f"LeadController: Failed to get lead {lead_id}.", exc_info=True)
             raise e
@@ -44,17 +42,11 @@ class LeadController:
         try:
             logger.info(f"LeadController: Updating lead {lead_id} stage to {stage}...")
 
-            valid_stages = {"cold", "warm", "hot", "qualified", "converted"}
-            if stage not in valid_stages:
-                raise HTTPException(400, f"Invalid stage. Choose from: {valid_stages}")
-
-            await self.repo.update_stage(lead_id, stage)
+            result = await self.lead_mediator.update_lead_stage(lead_id, stage)
 
             logger.info(f"LeadController: Lead {lead_id} stage updated to {stage} successfully.")
-            return {"message": f"Lead stage updated to {stage}"}
+            return result
 
-        except HTTPException:
-            raise
         except Exception as e:
             logger.error(f"LeadController: Failed to update lead {lead_id} stage.", exc_info=True)
             raise e

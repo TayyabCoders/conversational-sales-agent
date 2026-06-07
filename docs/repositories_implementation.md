@@ -404,7 +404,8 @@ class KnowledgeRepository(BaseRepository[KnowledgeDoc]):
             logger.error("KnowledgeRepository: Failed to list knowledge docs.", exc_info=True)
             raise e
 
-    async def delete_qdrant_chunks(self, doc_id: str) -> None:
+    async def delete_chunks_by_doc(self, doc_id: str) -> None:
+        """Delete all pgvector chunk rows for a given document."""
         try:
             logger.info(f"KnowledgeRepository: Deleting chunks for doc {doc_id}...")
 
@@ -413,7 +414,6 @@ class KnowledgeRepository(BaseRepository[KnowledgeDoc]):
             await chunk_repo.deleteWhere(filters={"doc_id": doc_id})
 
             logger.info(f"KnowledgeRepository: Deleted chunks for doc {doc_id}")
-            # Note: Qdrant deletion is handled in knowledge_indexer worker
 
         except Exception as e:
             logger.error(f"KnowledgeRepository: Failed to delete chunks for doc {doc_id}.", exc_info=True)
@@ -422,7 +422,7 @@ class KnowledgeRepository(BaseRepository[KnowledgeDoc]):
 
 **Changes from build plan:**
 - Removed `tenant_id` parameter from all methods (tenant logic excluded)
-- Removed `tenant_id` from `delete_qdrant_chunks` method
+- Renamed `delete_qdrant_chunks` to `delete_chunks_by_doc` (pgvector instead of Qdrant)
 - Adapted to use BaseRepository pattern instead of direct AsyncSession
 - Uses `@inject` decorator on `__init__` following project pattern
 - Uses `Provide["database"]` and `Provide["cache"]` for dependency injection
@@ -475,7 +475,7 @@ __all__ = [
   - [ ] Create create method
   - [ ] Create update_status method
   - [ ] Create list_all method
-  - [ ] Create delete_qdrant_chunks method
+  - [ ] Create delete_chunks_by_doc method
   - [ ] Remove tenant_id parameters
   - [ ] Add proper imports and logging
 - [ ] Update/Create `app/repositories/__init__.py`

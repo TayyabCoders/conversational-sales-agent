@@ -39,7 +39,7 @@ class AgentService:
             # 1. Load conversation history from Redis
             history = await self.memory.get_history(conversation_id)
 
-            # 2. Retrieve relevant knowledge from Qdrant
+            # 2. Retrieve relevant knowledge from PostgreSQL + pgvector
             knowledge = await self.rag.retrieve(
                 query=message,
                 top_k=5,

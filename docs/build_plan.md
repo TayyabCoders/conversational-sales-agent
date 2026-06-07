@@ -1,6 +1,6 @@
 # AI Sales Agent — Step-by-Step Build Plan
 > Flow: `schema → route → controller → mediator → service → repository`  
-> Stack: FastAPI Boilerplate · PostgreSQL · Redis · Qdrant · RabbitMQ · OpenAI
+> Stack: FastAPI Boilerplate · PostgreSQL + pgvector · Redis · RabbitMQ · OpenAI
 
 ---
 
@@ -159,12 +159,16 @@ class KnowledgeDoc(BaseModel):
 class KnowledgeChunk(BaseModel):
     __tablename__ = "knowledge_chunks"
 
-    doc_id:         Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge_docs.id"), index=True)
-    tenant_id:      Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), index=True)
-    content:        Mapped[str]       = mapped_column(Text)
-    qdrant_point_id:Mapped[str]       = mapped_column(String(100))
+    doc_id:    Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge_docs.id"), index=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), index=True)
+    content:   Mapped[str]       = mapped_column(Text)
+    # pgvector column — stores 1536-dim OpenAI embedding
+    # Declared via DDL string because SQLAlchemy has no native Vector type
+    # Alembic migration handles CREATE EXTENSION and the actual column type
 
     doc: Mapped["KnowledgeDoc"] = relationship(back_populates="chunks")
+
+    # Note: the embedding column is added in migration (see Step 1 migration note)
 ```
 
 ---
@@ -176,6 +180,44 @@ alembic revision --autogenerate -m "add_conversation_message_models"
 alembic revision --autogenerate -m "add_lead_model"
 alembic revision --autogenerate -m "add_knowledge_models"
 alembic upgrade head
+```
+
+> **pgvector setup** — your Docker image `pgvector/pgvector:pg16` already has the extension.  
+> Add this to the `add_knowledge_models` migration file manually:
+
+```python
+# alembic/versions/xxxx_add_knowledge_models.py
+from alembic import op
+import sqlalchemy as sa
+
+def upgrade():
+    # Enable pgvector extension
+    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+    op.create_table(
+        "knowledge_chunks",
+        sa.Column("id",        sa.UUID(),    primary_key=True),
+        sa.Column("doc_id",    sa.UUID(),    sa.ForeignKey("knowledge_docs.id"), index=True),
+        sa.Column("tenant_id", sa.UUID(),    sa.ForeignKey("tenants.id"),        index=True),
+        sa.Column("content",   sa.Text(),    nullable=False),
+        # 1536 dims = text-embedding-3-small
+        sa.Column("embedding", sa.Text(),    nullable=True),   # stored as vector(1536)
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), onupdate=sa.func.now()),
+    )
+
+    # Change embedding column to actual vector type after creation
+    op.execute("ALTER TABLE knowledge_chunks ALTER COLUMN embedding TYPE vector(1536) USING embedding::vector")
+
+    # IVFFlat index for fast ANN search (build after inserting data)
+    op.execute(
+        "CREATE INDEX knowledge_chunks_embedding_idx "
+        "ON knowledge_chunks USING ivfflat (embedding vector_cosine_ops) "
+        "WITH (lists = 100)"
+    )
+
+def downgrade():
+    op.drop_table("knowledge_chunks")
 ```
 
 ---
@@ -897,8 +939,8 @@ class KnowledgeMediator:
 
     async def delete_document(self, doc_id: str):
         doc = await self.repo.get_by_id(doc_id)
-        # Remove from Qdrant (by doc_id metadata filter)
-        await self.repo.delete_qdrant_chunks(doc_id, doc.tenant_id)
+        # Delete all embedding chunks from PostgreSQL for this doc
+        await self.repo.delete_chunks_by_doc(doc_id)
         # Delete DB record
         await self.repo.delete(doc_id)
 
@@ -955,7 +997,7 @@ class AgentService:
         # 1. Load conversation history from Redis
         history = await self.memory.get_history(conversation_id)
 
-        # 2. Retrieve relevant knowledge from Qdrant
+        # 2. Retrieve relevant knowledge from PostgreSQL pgvector
         knowledge = await self.rag.retrieve(
             query=message,
             tenant_id=tenant_config["id"],
@@ -1007,42 +1049,68 @@ class AgentService:
 
 ### `app/services/ai/rag_service.py`
 ```python
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue
 from openai import AsyncOpenAI
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+import json
 
 
 class RAGService:
-    def __init__(self, qdrant: AsyncQdrantClient, openai: AsyncOpenAI, collection: str):
-        self.qdrant     = qdrant
-        self.openai     = openai
-        self.collection = collection
+    """
+    Retrieval-Augmented Generation using PostgreSQL + pgvector.
+    Uses your existing Database class (read session → replica if available).
+    """
+
+    def __init__(self, db: AsyncSession, openai: AsyncOpenAI):
+        self.db     = db
+        self.openai = openai
 
     async def retrieve(self, query: str, tenant_id: str, top_k: int = 5) -> str:
-        # 1. Embed the query
+        # 1. Embed the query using OpenAI
         embed_resp = await self.openai.embeddings.create(
-            model="text-embedding-3-small",
-            input=query,
+            model = "text-embedding-3-small",
+            input = query,
         )
         query_vector = embed_resp.data[0].embedding
+        # Convert to pgvector literal string e.g. "[0.1, 0.2, ...]"
+        vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
 
-        # 2. Search Qdrant — filtered by tenant_id
-        results = await self.qdrant.search(
-            collection_name = self.collection,
-            query_vector    = query_vector,
-            query_filter    = Filter(must=[
-                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
-            ]),
-            limit           = top_k,
-            score_threshold = 0.72,
+        # 2. Cosine similarity search — filtered by tenant_id
+        # <=> operator = cosine distance (lower = more similar)
+        sql = text("""
+            SELECT content,
+                   1 - (embedding <=> :query_vec::vector) AS similarity
+            FROM   knowledge_chunks
+            WHERE  tenant_id = :tenant_id
+              AND  1 - (embedding <=> :query_vec::vector) > 0.72
+            ORDER  BY embedding <=> :query_vec::vector
+            LIMIT  :top_k
+        """)
+
+        result = await self.db.execute(
+            sql,
+            {
+                "query_vec": vector_str,
+                "tenant_id": tenant_id,
+                "top_k":     top_k,
+            },
         )
+        rows = result.fetchall()
 
-        if not results:
+        if not rows:
             return "No relevant knowledge found for this query."
 
-        # 3. Format as numbered context
-        chunks = [f"[{i+1}] {r.payload['content']}" for i, r in enumerate(results)]
+        # 3. Format as numbered context string
+        chunks = [f"[{i+1}] {row.content}" for i, row in enumerate(rows)]
         return "\n\n".join(chunks)
+
+    async def embed_text(self, text_input: str) -> list[float]:
+        """Embed a single string — used by knowledge_consumer."""
+        resp = await self.openai.embeddings.create(
+            model = "text-embedding-3-small",
+            input = text_input,
+        )
+        return resp.data[0].embedding
 ```
 
 ---
@@ -1555,14 +1623,13 @@ class KnowledgeRepository(BaseRepository[KnowledgeDoc]):
         )
         return result.scalars().all()
 
-    async def delete_qdrant_chunks(self, doc_id: str, tenant_id: str) -> None:
-        # Delete from PostgreSQL chunks table
+    async def delete_chunks_by_doc(self, doc_id: str) -> None:
+        """Delete all pgvector chunk rows for a given document."""
         from app.models.knowledge_doc_model import KnowledgeChunk
         await self.db.execute(
             delete(KnowledgeChunk).where(KnowledgeChunk.doc_id == uuid.UUID(doc_id))
         )
         await self.db.commit()
-        # Note: Qdrant deletion is handled in knowledge_indexer worker
 ```
 
 ---
@@ -1583,7 +1650,7 @@ message_mediator.publish()
       v
 RabbitMQ exchange: "ai"
   ├── routing_key: "ai.messages"  →  ai_message_consumer  →  AI pipeline → WhatsApp
-  └── routing_key: "ai.knowledge" →  knowledge_consumer   →  embed + Qdrant
+  └── routing_key: "ai.knowledge" →  knowledge_consumer   →  embed + pgvector (PostgreSQL)
 ```
 
 ---
@@ -1697,13 +1764,13 @@ async def _process(
 
     # --- AI pipeline ---
     from openai import AsyncOpenAI
-    from qdrant_client import AsyncQdrantClient
 
+    # Use read session for RAG (will use replica if available)
+    db_session = db.get_session("read")
     agent = AgentService(
         rag            = RAGService(
-                             qdrant     = AsyncQdrantClient(url=settings.QDRANT_URL),
-                             openai     = AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
-                             collection = settings.QDRANT_COLLECTION,
+                             db     = db_session,
+                             openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
                          ),
         memory         = MemoryService(redis=..., window=settings.AI_MEMORY_WINDOW),
         prompt_builder = PromptBuilder(),
@@ -1797,10 +1864,10 @@ import uuid
 import httpx
 import io
 from app.configs.messaging_config import RabbitMQClient
+from app.configs.database_config import Database
 from app.repositories.knowledge_repository import KnowledgeRepository
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import PointStruct
 from openai import AsyncOpenAI
+from sqlalchemy import text
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 logger = logging.getLogger(__name__)
@@ -1870,21 +1937,27 @@ async def _index(doc_id: str, tenant_id: str, file_url: str, file_type: str) -> 
         )
         vectors = [e.embedding for e in embed_resp.data]
 
-        # 5. Upsert into Qdrant filtered by tenant_id
-        qdrant = AsyncQdrantClient()
-        points = [
-            PointStruct(
-                id      = str(uuid.uuid4()),
-                vector  = vec,
-                payload = {
-                    "tenant_id": tenant_id,
-                    "doc_id":    doc_id,
-                    "content":   chunk,
-                },
-            )
-            for chunk, vec in zip(chunks, vectors)
-        ]
-        await qdrant.upsert(collection_name="knowledge_base", points=points)
+        # 5. Insert chunks + vectors into PostgreSQL (pgvector)
+        db = Database()        # use your existing Database instance from DI
+        async with db.get_session("write") as session:
+            for chunk, vec in zip(chunks, vectors):
+                vector_str = "[" + ",".join(str(v) for v in vec) + "]"
+                await session.execute(
+                    text("""
+                        INSERT INTO knowledge_chunks
+                            (id, doc_id, tenant_id, content, embedding, created_at)
+                        VALUES
+                            (:id, :doc_id, :tenant_id, :content, :embedding::vector, NOW())
+                    """),
+                    {
+                        "id":        str(uuid.uuid4()),
+                        "doc_id":    doc_id,
+                        "tenant_id": tenant_id,
+                        "content":   chunk,
+                        "embedding": vector_str,
+                    },
+                )
+            await session.commit()
 
         # 6. Mark as indexed in PostgreSQL
         await repo.update_status(doc_id, "indexed", chunk_count=len(chunks))
@@ -2025,7 +2098,6 @@ def verify_whatsapp_signature(body: bytes, signature_header: str) -> None:
 # Add these imports and providers to your existing Container class
 
 from openai import AsyncOpenAI
-from qdrant_client import AsyncQdrantClient
 from app.configs.messaging_config import RabbitMQClient
 from app.services.ai.agent_service import AgentService
 from app.services.ai.rag_service import RAGService
@@ -2059,10 +2131,8 @@ rabbitmq = providers.Singleton(
 
 # AI clients
 openai_client = providers.Singleton(AsyncOpenAI, api_key=config.OPENAI_API_KEY)
-qdrant_client = providers.Singleton(AsyncQdrantClient, url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
-
 # AI services
-rag_service     = providers.Factory(RAGService, qdrant=qdrant_client, openai=openai_client, collection=config.QDRANT_COLLECTION)
+rag_service     = providers.Factory(RAGService, db=db_session, openai=openai_client)
 memory_service  = providers.Factory(MemoryService, redis=redis, window=config.AI_MEMORY_WINDOW)
 prompt_builder  = providers.Singleton(PromptBuilder)
 guardrails      = providers.Singleton(GuardrailsService)
@@ -2113,8 +2183,6 @@ from app.edge.http.routes import (
 )
 from app.workers.ai_message_consumer import start_ai_message_consumer
 from app.workers.knowledge_consumer import start_knowledge_consumer
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, VectorParams
 from app.configs.app_config import get_settings
 
 settings = get_settings()
@@ -2124,17 +2192,8 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     # --- Your existing startup code ---
 
-    # --- New 1: Initialize Qdrant collection ---
-    qdrant      = AsyncQdrantClient(url=settings.QDRANT_URL)
-    collections = await qdrant.get_collections()
-    names       = [c.name for c in collections.collections]
-    if settings.QDRANT_COLLECTION not in names:
-        await qdrant.create_collection(
-            collection_name = settings.QDRANT_COLLECTION,
-            vectors_config  = VectorParams(size=1536, distance=Distance.COSINE),
-        )
-
-    # --- New 2: Connect RabbitMQ and start consumers ---
+    # --- New: Connect RabbitMQ and start consumers ---
+    # pgvector is already set up via Alembic migration — no runtime init needed
     container = Container()
     rabbitmq  = container.rabbitmq()
     await rabbitmq.connect()
@@ -2168,26 +2227,23 @@ app.include_router(lead_route.router,         prefix="/api/v1")
 
 ## Step 12 — Docker Compose Extension
 
-> RabbitMQ is already in your `docker-compose.yml` via `messaging_config.py`.  
-> Only add **Qdrant** — no new worker containers needed.  
-> Consumers start automatically inside the FastAPI process via `lifespan`.
+> **Nothing to add.** Your `docker-compose.yml` already has everything needed:
+> - `pgvector/pgvector:pg16` image → pgvector extension is built-in
+> - RabbitMQ already configured via `messaging_config.py`
+> - Consumers start inside FastAPI via `lifespan` — no extra containers
 
-### `docker-compose.yml` (append to existing services)
+Just confirm your existing PostgreSQL service has the pgvector image:
+
 ```yaml
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    restart: unless-stopped
-
-volumes:
-  qdrant_data:
+# Already in your docker-compose.yml — confirm this line:
+  fastapi-postgres-primary:
+    image: pgvector/pgvector:pg16    # ✅ pgvector included
+    # ... rest of your config unchanged
 ```
 
-> That's it. No celery-worker, no celery-beat, no flower.  
-> Workers live inside the FastAPI app — started in `main.py` lifespan.
+> Run `alembic upgrade head` after startup — the migration enables the
+> `vector` extension and creates the `knowledge_chunks` table with the
+> `embedding vector(1536)` column and IVFFlat index automatically.
 
 ---
 
@@ -2204,10 +2260,6 @@ AI_TEMPERATURE=0.7
 AI_MAX_TOKENS=800
 AI_MEMORY_WINDOW=20
 AI_CONFIDENCE_THRESHOLD=0.75
-
-# Qdrant
-QDRANT_URL=http://localhost:6333
-QDRANT_COLLECTION=knowledge_base
 
 # RabbitMQ (already in your .env — just confirm these exist)
 RABBITMQ_HOST=localhost
@@ -2228,7 +2280,6 @@ WHATSAPP_API_VERSION=v21.0
 ```txt
 # Add to requirements.txt
 openai>=1.51.0
-qdrant-client>=1.11.0
 langchain>=0.3.0
 langchain-openai>=0.2.0
 langchain-community>=0.3.0

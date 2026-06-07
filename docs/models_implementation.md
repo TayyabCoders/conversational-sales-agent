@@ -301,29 +301,33 @@ class KnowledgeChunk(Base):
         primary_key=True,
         default=uuid.uuid4
     )
-    
+
     doc_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("knowledge_docs.id"),
         index=True
     )
-    
+
     content: Mapped[str] = mapped_column(Text)
-    
-    qdrant_point_id: Mapped[str] = mapped_column(String(100))
-    
+
+    # pgvector column — stores 1536-dim OpenAI embedding
+    # Declared via DDL string because SQLAlchemy has no native Vector type
+    # Alembic migration handles CREATE EXTENSION and the actual column type
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now()
     )
-    
+
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now()
     )
-    
+
     # Relationship
     doc: Mapped["KnowledgeDoc"] = relationship(back_populates="chunks")
+
+    # Note: the embedding column is added in migration (see migration note below)
 ```
 
 **New file** with two models for knowledge base management.
@@ -400,6 +404,46 @@ alembic upgrade head
 ```bash
 alembic revision --autogenerate -m "add_knowledge_models_and_update_existing_models"
 alembic upgrade head
+```
+
+---
+
+### pgvector Setup for Knowledge Chunks
+
+Your Docker image `pgvector/pgvector:pg16` already has the extension. Add this to the `add_knowledge_models` migration file manually:
+
+```python
+# alembic/versions/xxxx_add_knowledge_models.py
+from alembic import op
+import sqlalchemy as sa
+
+def upgrade():
+    # Enable pgvector extension
+    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+    op.create_table(
+        "knowledge_chunks",
+        sa.Column("id",        sa.UUID(),    primary_key=True),
+        sa.Column("doc_id",    sa.UUID(),    sa.ForeignKey("knowledge_docs.id"), index=True),
+        sa.Column("content",   sa.Text(),    nullable=False),
+        # 1536 dims = text-embedding-3-small
+        sa.Column("embedding", sa.Text(),    nullable=True),   # stored as vector(1536)
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), onupdate=sa.func.now()),
+    )
+
+    # Change embedding column to actual vector type after creation
+    op.execute("ALTER TABLE knowledge_chunks ALTER COLUMN embedding TYPE vector(1536) USING embedding::vector")
+
+    # IVFFlat index for fast ANN search (build after inserting data)
+    op.execute(
+        "CREATE INDEX knowledge_chunks_embedding_idx "
+        "ON knowledge_chunks USING ivfflat (embedding vector_cosine_ops) "
+        "WITH (lists = 100)"
+    )
+
+def downgrade():
+    op.drop_table("knowledge_chunks")
 ```
 
 ---

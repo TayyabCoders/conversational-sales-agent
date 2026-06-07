@@ -54,26 +54,30 @@ class KnowledgeChunk(Base):
         primary_key=True,
         default=uuid.uuid4
     )
-    
+
     doc_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("knowledge_docs.id"),
         index=True
     )
-    
+
     content: Mapped[str] = mapped_column(Text)
-    
-    qdrant_point_id: Mapped[str] = mapped_column(String(100))
-    
+
+    # pgvector column — stores 1536-dim OpenAI embedding
+    # Declared via DDL string because SQLAlchemy has no native Vector type
+    # Alembic migration handles CREATE EXTENSION and the actual column type
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now()
     )
-    
+
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now()
     )
-    
+
     # Relationship
     doc: Mapped["KnowledgeDoc"] = relationship(back_populates="chunks")
+
+    # Note: the embedding column is added in migration (see migration note below)

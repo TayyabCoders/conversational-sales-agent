@@ -200,8 +200,8 @@ class KnowledgeMediator:
             logger.info(f"KnowledgeMediator: Deleting document {doc_id}...")
 
             doc = await self.repo.get_by_id(doc_id)
-            # Remove from Qdrant (by doc_id metadata filter)
-            await self.repo.delete_qdrant_chunks(doc_id)
+            # Delete all embedding chunks from PostgreSQL for this doc
+            await self.repo.delete_chunks_by_doc(doc_id)
             # Delete DB record
             await self.repo.delete(doc_id)
 
@@ -240,7 +240,7 @@ class KnowledgeMediator:
 - Removed `tenant_id` from repository `create` call
 - Removed `tenant_id` from RabbitMQ message
 - Changed from Celery `index_document_task.delay()` to RabbitMQ `rabbitmq.publish()`
-- Removed `tenant_id` parameter from `delete_qdrant_chunks` call
+- Changed from `delete_qdrant_chunks` to `delete_chunks_by_doc` (pgvector instead of Qdrant)
 - Changed from Celery `index_document_task.delay()` to RabbitMQ `rabbitmq.publish()` in `reindex_document`
 - Added `rabbitmq` dependency injection
 - Added `@inject` decorator on `__init__` following project pattern
