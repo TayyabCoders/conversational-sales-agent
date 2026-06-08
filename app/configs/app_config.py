@@ -106,7 +106,12 @@ class Settings(BaseSettings):
     WHATSAPP_API_VERSION: str = Field(default="v21.0", env="WHATSAPP_API_VERSION")
     WHATSAPP_PHONE_NUMBER_ID: Optional[str] = Field(default=None, env="WHATSAPP_PHONE_NUMBER_ID")
     WHATSAPP_ACCESS_TOKEN: Optional[str] = Field(default=None, env="WHATSAPP_ACCESS_TOKEN")
-    
+
+    # Cloudinary
+    CLOUDINARY_CLOUD_NAME: Optional[str] = Field(default=None, env="CLOUDINARY_CLOUD_NAME")
+    CLOUDINARY_API_KEY: Optional[str] = Field(default=None, env="CLOUDINARY_API_KEY")
+    CLOUDINARY_API_SECRET: Optional[str] = Field(default=None, env="CLOUDINARY_API_SECRET")
+
     class Config:
         env_file = ".env"
         case_sensitive = True

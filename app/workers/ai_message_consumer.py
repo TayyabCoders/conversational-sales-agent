@@ -5,7 +5,7 @@ Started inside FastAPI lifespan via asyncio.create_task().
 import asyncio
 import logging
 from app.configs.messaging_config import RabbitMQClient
-from app.configs.app_config import get_settings
+from app.configs.app_config import settings
 from app.services.ai.agent_service import AgentService
 from app.services.ai.rag_service import RAGService
 from app.services.ai.memory_service import MemoryService
@@ -19,7 +19,6 @@ from app.repositories.lead_repository import LeadRepository
 from structlog import get_logger
 
 logger = get_logger(__name__)
-settings = get_settings()
 
 
 async def start_ai_message_consumer(rabbitmq: RabbitMQClient) -> None:

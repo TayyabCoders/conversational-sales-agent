@@ -31,8 +31,13 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database connection...")
     await database.connect()
 
-    # 1.1 Start WebSocket Connection Manager Background Tasks
+    # 1.1 Setup WebSocket Connection Manager Dependencies
     from app.edge.socket.connection_manager import manager
+    from app.di.container import container
+    
+    prometheus = container.resolve('prometheus')
+    redis = container.resolve('cache')
+    manager.set_dependencies(prometheus=prometheus, redis=redis)
     await manager.start()
 
     # 2. Initialize Models (create tables) - controlled by setting
@@ -91,17 +96,13 @@ def create_app() -> FastAPI:
 
     register_routes(app)
     
-    # 6. Setup WebSocket routes
+    # Setup WebSocket routes
     from app.edge.socket.socket_route import register_socket_routes
-    from app.edge.socket.connection_manager import manager
-    from app.di.container import container
-    
-    prometheus = container.resolve('prometheus')
-    redis = container.resolve('cache')
-    manager.set_dependencies(prometheus=prometheus, redis=redis)
     register_socket_routes(app)
     
-    # 5. Setup Prometheus metrics
+    # Setup Prometheus metrics
+    from app.di.container import container
+    prometheus = container.resolve('prometheus')
     prometheus.setup_metrics(app)
     
     return app
