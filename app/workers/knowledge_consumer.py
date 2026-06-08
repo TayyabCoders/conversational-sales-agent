@@ -12,9 +12,10 @@ from app.configs.database_config import Database
 from app.repositories.knowledge_repository import KnowledgeRepository
 from app.services.ai.rag_service import RAGService
 from openai import AsyncOpenAI
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import text
 from structlog import get_logger
+import pypdf
 
 logger = get_logger(__name__)
 
@@ -116,8 +117,8 @@ async def _index(doc_id: str, file_url: str, file_type: str) -> None:
 
 def _extract_text(content: bytes, file_type: str) -> str:
     if file_type == "pdf":
-        import pypdf2
-        reader = pypdf2.PdfReader(io.BytesIO(content))
+       
+        reader = pypdf.PdfReader(io.BytesIO(content))
         return "\n".join(page.extract_text() for page in reader.pages)
     elif file_type == "docx":
         from docx import Document

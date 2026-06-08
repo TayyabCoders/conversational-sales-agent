@@ -2,7 +2,7 @@ from app.di.container import container
 from dependency_injector.wiring import inject, Provide
 from fastapi import UploadFile
 from app.configs.messaging_config import RabbitMQClient
-from app.utils.storage_util import upload_to_s3
+from app.utils.storage_util import upload_to_cloud
 from structlog import get_logger
 
 logger = get_logger(__name__)
@@ -22,9 +22,9 @@ class KnowledgeMediator:
         try:
             logger.info(f"KnowledgeMediator: Ingesting document {file.filename}...")
 
-            # 1. Upload raw file to S3
+            # 1. Upload raw file to Cloudinary
             file_bytes = await file.read()
-            file_url = await upload_to_s3(file_bytes, file.filename)
+            file_url = await upload_to_cloud(file_bytes, file.filename)
 
             # 2. Create DB record (status=pending) via service
             doc = await self.knowledge_service.create_document(

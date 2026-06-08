@@ -1,5 +1,6 @@
 from fastapi import Request, BackgroundTasks, HTTPException
 from fastapi.responses import PlainTextResponse
+from dependency_injector.wiring import inject, Provide
 from app.mediator.message_mediator import MessageMediator
 from app.schemas.webhook_schema import WhatsAppWebhookPayload, InboundMessage
 from app.utils.security_util import verify_whatsapp_signature
