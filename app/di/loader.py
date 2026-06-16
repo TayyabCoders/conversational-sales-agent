@@ -275,6 +275,18 @@ def load_infrastructure():
             singleton=True
         )
 
+        import google.generativeai as genai
+        def _initialize_gemini_client():
+            """Initialize Gemini client with API key"""
+            genai.configure(api_key=settings.GEMINI_API_KEY)
+            return genai.GenerativeModel(settings.GEMINI_MODEL)
+
+        container.register(
+            'gemini_client',
+            lambda: _initialize_gemini_client(),
+            singleton=True
+        )
+
         logger.info('✓ Infrastructure loaded')
 
     except Exception as e:

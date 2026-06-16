@@ -1,6 +1,7 @@
 from app.di.container import container
 from dependency_injector.wiring import inject, Provide
 from openai import AsyncOpenAI
+import google.generativeai as genai
 from app.services.ai.rag_service import RAGService
 from app.services.ai.memory_service import MemoryService
 from app.services.ai.prompt_builder import PromptBuilder
@@ -19,12 +20,14 @@ class AgentService:
         prompt_builder = Provide["prompt_builder"],
         guardrails = Provide["guardrails_service"],
         openai = Provide["openai_client"],
+        gemini_client = Provide["gemini_client"],
     ):
         self.rag = rag
         self.memory = memory
         self.prompt_builder = prompt_builder
         self.guardrails = guardrails
-        self.llm = openai
+        self.openai = openai
+        self.gemini_client = gemini_client
 
     async def process_message(
         self,
@@ -54,19 +57,48 @@ class AgentService:
                 hard_rules=config.get("hard_rules", []),
             )
 
-            # 4. LLM inference
-            response = await self.llm.chat.completions.create(
-                model=config.get("model", "gpt-4o"),
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    *history,
-                    {"role": "user", "content": message},
-                ],
-                temperature=config.get("temperature", 0.7),
-                max_tokens=config.get("max_tokens", 800),
-            )
+            # 4. LLM inference - use Gemini or OpenAI based on config
+            use_gemini = config.get("use_gemini", False)
 
-            raw_response = response.choices[0].message.content
+            if use_gemini and self.gemini_client:
+                # Build conversation history for Gemini
+                gemini_history = []
+                for msg in history:
+                    role = "user" if msg["role"] == "user" else "model"
+                    gemini_history.append({"role": role, "parts": [msg["content"]]})
+
+                # Start chat with history
+                chat = self.gemini_client.start_chat(history=gemini_history)
+
+                # Combine system prompt with user message for Gemini
+                full_message = f"{system_prompt}\n\nUser: {message}"
+
+                response = await chat.send_message_async(
+                    full_message,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=config.get("temperature", 0.7),
+                        max_output_tokens=config.get("max_tokens", 800),
+                    )
+                )
+
+                raw_response = response.text
+                tokens_used = response.usage_metadata.total_token_count if hasattr(response, 'usage_metadata') else 0
+            elif self.openai:
+                response = await self.openai.chat.completions.create(
+                    model=config.get("model", "gpt-4o"),
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        *history,
+                        {"role": "user", "content": message},
+                    ],
+                    temperature=config.get("temperature", 0.7),
+                    max_tokens=config.get("max_tokens", 800),
+                )
+
+                raw_response = response.choices[0].message.content
+                tokens_used = response.usage.total_tokens
+            else:
+                raise ValueError("No AI client configured")
 
             # 5. Run guardrails (safety + confidence check)
             safe_response, confidence = await self.guardrails.validate(
@@ -78,8 +110,9 @@ class AgentService:
             await self.memory.append(conversation_id, "assistant", safe_response)
 
             logger.info(f"AgentService: AI response generated for conversation {conversation_id}", extra={
-                "tokens_used": response.usage.total_tokens,
+                "tokens_used": tokens_used,
                 "confidence": confidence,
+                "provider": "gemini" if use_gemini else "openai",
             })
 
             return safe_response, confidence

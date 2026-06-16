@@ -95,21 +95,33 @@ async def _process(
 
     # --- AI pipeline ---
     from openai import AsyncOpenAI
+    import google.generativeai as genai
     from app.di.container import container
 
     # Use read session for RAG (will use replica if available)
     db = container.resolve('database')
     db_session = db.get_session("read")
 
+    # Initialize clients based on feature flag
+    use_gemini = settings.USE_GEMINI
+    openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY) if not use_gemini else None
+    gemini_client = None
+    if use_gemini:
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        gemini_client = genai.GenerativeModel(settings.GEMINI_MODEL)
+
     agent = AgentService(
         rag            = RAGService(
-                             db     = db_session,
-                             openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
+                             db = db_session,
+                             openai = openai_client,
+                             gemini_client = gemini_client,
+                             use_gemini = use_gemini,
                          ),
         memory         = MemoryService(redis=..., window=settings.AI_MEMORY_WINDOW),
         prompt_builder = PromptBuilder(),
         guardrails     = guardrails,
-        openai         = AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
+        openai         = openai_client,
+        gemini_client  = gemini_client,
     )
 
     # Use default AI config (tenant logic excluded)
@@ -119,9 +131,10 @@ async def _process(
         "business_name": "",
         "tone": "friendly and professional",
         "hard_rules": [],
-        "model": "gpt-4o",
+        "model": "gpt-4o" if not use_gemini else settings.GEMINI_MODEL,
         "temperature": 0.7,
         "max_tokens": 800,
+        "use_gemini": use_gemini,
     }
 
     response_text, confidence = await agent.process_message(
@@ -185,25 +198,55 @@ async def _escalate(conversation_id: str, conv_repo: ConversationRepository) -> 
 
 
 async def _transcribe_voice(audio_bytes: bytes) -> str:
-    from openai import AsyncOpenAI
+    """Transcribe audio using Gemini (if enabled) or OpenAI Whisper"""
     import io
-    transcript = await AsyncOpenAI().audio.transcriptions.create(
-        model = "whisper-1",
-        file  = ("voice.ogg", io.BytesIO(audio_bytes), "audio/ogg"),
-    )
-    return transcript.text
+    from app.configs.app_config import settings
+
+    if settings.USE_GEMINI:
+        import google.generativeai as genai
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        response = await model.generate_content_async(
+            [
+                {"mime_type": "audio/ogg", "data": audio_bytes},
+                "Transcribe this audio"
+            ]
+        )
+        return response.text
+    else:
+        from openai import AsyncOpenAI
+        transcript = await AsyncOpenAI().audio.transcriptions.create(
+            model = "whisper-1",
+            file  = ("voice.ogg", io.BytesIO(audio_bytes), "audio/ogg"),
+        )
+        return transcript.text
 
 
 async def _describe_image(image_bytes: bytes, customer_text: str) -> str:
+    """Describe image using Gemini (if enabled) or OpenAI GPT-4o"""
     import base64
-    from openai import AsyncOpenAI
-    b64  = base64.b64encode(image_bytes).decode()
-    resp = await AsyncOpenAI().chat.completions.create(
-        model    = "gpt-4o",
-        messages = [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            {"type": "text",      "text": customer_text or "What is in this image?"},
-        ]}],
-        max_tokens = 500,
-    )
-    return resp.choices[0].message.content
+    from app.configs.app_config import settings
+
+    if settings.USE_GEMINI:
+        import google.generativeai as genai
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        response = await model.generate_content_async(
+            [
+                {"mime_type": "image/jpeg", "data": image_bytes},
+                customer_text or "What is in this image?"
+            ]
+        )
+        return response.text
+    else:
+        from openai import AsyncOpenAI
+        b64  = base64.b64encode(image_bytes).decode()
+        resp = await AsyncOpenAI().chat.completions.create(
+            model    = "gpt-4o",
+            messages = [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                {"type": "text",      "text": customer_text or "What is in this image?"},
+            ]}],
+            max_tokens = 500,
+        )
+        return resp.choices[0].message.content
