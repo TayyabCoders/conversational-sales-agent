@@ -103,7 +103,7 @@ class RabbitMQClient:
         
         try:
             # Ensure exchange exists
-            await self._ensure_exchange(exchange)
+            exchange_obj = await self._ensure_exchange(exchange)
             
             # Create message
             message_body = json.dumps(message).encode()
@@ -114,8 +114,8 @@ class RabbitMQClient:
                 content_type="application/json",
             )
             
-            # Publish message
-            await self.channel.default_exchange.publish(
+            # Publish message to the specified exchange
+            await exchange_obj.publish(
                 message_obj,
                 routing_key=routing_key,
             )
@@ -177,16 +177,17 @@ class RabbitMQClient:
         await queue.consume(_on_message)
     
  
-    async def _ensure_exchange(self, exchange: str) -> None:
-        """Ensure exchange exists"""
+    async def _ensure_exchange(self, exchange: str):
+        """Ensure exchange exists and return it"""
         try:
-            await self.channel.declare_exchange(
+            return await self.channel.declare_exchange(
                 exchange,
                 ExchangeType.TOPIC,
                 durable=True,
             )
         except Exception as e:
             logger.warning(f"Failed to declare exchange {exchange}: {e}")
+            raise
     
     @property
     def connected(self) -> bool:

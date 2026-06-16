@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
     OPENAI_MODEL: str = Field(default="gpt-4o", env="OPENAI_MODEL")
     OPENAI_EMBEDDING_MODEL: str = Field(default="text-embedding-3-small", env="OPENAI_EMBEDDING_MODEL")
+    GEMINI_API_KEY: Optional[str] = Field(default=None, env="GEMINI_API_KEY")
+    GEMINI_MODEL: str = Field(default="gemini-2.5-flash", env="GEMINI_MODEL")
+    GEMINI_EMBEDDING_MODEL: str = Field(default="models/gemini-embedding-001", env="GEMINI_EMBEDDING_MODEL")
+    USE_GEMINI: bool = Field(default=False, env="USE_GEMINI")
     AI_TEMPERATURE: float = Field(default=0.7, env="AI_TEMPERATURE")
     AI_MAX_TOKENS: int = Field(default=800, env="AI_MAX_TOKENS")
     AI_MEMORY_WINDOW: int = Field(default=20, env="AI_MEMORY_WINDOW")
@@ -106,7 +110,12 @@ class Settings(BaseSettings):
     WHATSAPP_API_VERSION: str = Field(default="v21.0", env="WHATSAPP_API_VERSION")
     WHATSAPP_PHONE_NUMBER_ID: Optional[str] = Field(default=None, env="WHATSAPP_PHONE_NUMBER_ID")
     WHATSAPP_ACCESS_TOKEN: Optional[str] = Field(default=None, env="WHATSAPP_ACCESS_TOKEN")
-    
+
+    # Cloudinary
+    CLOUDINARY_CLOUD_NAME: Optional[str] = Field(default=None, env="CLOUDINARY_CLOUD_NAME")
+    CLOUDINARY_API_KEY: Optional[str] = Field(default=None, env="CLOUDINARY_API_KEY")
+    CLOUDINARY_API_SECRET: Optional[str] = Field(default=None, env="CLOUDINARY_API_SECRET")
+
     class Config:
         env_file = ".env"
         case_sensitive = True

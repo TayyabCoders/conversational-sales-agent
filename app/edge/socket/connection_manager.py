@@ -48,11 +48,15 @@ class ConnectionManager:
 
     async def _listen_to_redis(self):
         """Listen to Redis for cross-instance messages"""
+        if not self.redis or not self.redis.client:
+            logger.warning("Redis client not available, skipping Redis Pub/Sub listener")
+            return
+
         pubsub = self.redis.client.pubsub()
         pubsub.subscribe("ws_broadcast", "ws_user", "ws_room")
-        
+
         logger.info("Started listening to Redis Pub/Sub for WebSockets")
-        
+
         while True:
             try:
                 # Since redis-py's pubsub is blocking, we use a loop or thread
@@ -62,14 +66,14 @@ class ConnectionManager:
                 if message:
                     channel = message['channel']
                     data = json.loads(message['data'])
-                    
+
                     if channel == "ws_broadcast":
                         await self._local_broadcast(data)
                     elif channel == "ws_user":
                         await self._local_send_to_user(data.get("user_id"), data.get("message"))
                     elif channel == "ws_room":
                         await self._local_send_to_room(data.get("room_id"), data.get("message"), data.get("exclude_client"))
-                
+
                 await asyncio.sleep(0.01)
             except Exception as e:
                 logger.error(f"Error in Redis Pub/Sub listener: {e}")

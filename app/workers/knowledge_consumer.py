@@ -12,9 +12,10 @@ from app.configs.database_config import Database
 from app.repositories.knowledge_repository import KnowledgeRepository
 from app.services.ai.rag_service import RAGService
 from openai import AsyncOpenAI
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from sqlalchemy import text
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sqlalchemy import text, cast
 from structlog import get_logger
+import pypdf
 
 logger = get_logger(__name__)
 
@@ -61,7 +62,7 @@ async def _index(doc_id: str, file_url: str, file_type: str) -> None:
             content = resp.content
 
         # 2. Extract text based on file type
-        text = _extract_text(content, file_type)
+        extracted_text = _extract_text(content, file_type)
 
         # 3. Chunk with overlap
         splitter = RecursiveCharacterTextSplitter(
@@ -69,37 +70,56 @@ async def _index(doc_id: str, file_url: str, file_type: str) -> None:
             chunk_overlap = 50,
             separators    = ["\n\n", "\n", ". ", " "],
         )
-        chunks = splitter.split_text(text)
+        chunks = splitter.split_text(extracted_text)
 
-        # 4. Embed all chunks using OpenAI directly
+        # 4. Embed all chunks using configured provider
         from app.di.container import container
+        from app.configs.app_config import settings
         db = container.resolve('database')
-        openai = container.resolve('openai_client')
-        
+
+        use_gemini = settings.USE_GEMINI
+        openai_client = container.resolve('openai_client') if not use_gemini else None
+        gemini_client = container.resolve('gemini_client') if use_gemini else None
+
         vectors = []
-        for chunk in chunks:
-            embed_resp = await openai.embeddings.create(
-                model="text-embedding-3-small",
-                input=chunk,
-            )
-            vectors.append(embed_resp.data[0].embedding)
+        if use_gemini and gemini_client:
+            import google.generativeai as genai
+            for chunk in chunks:
+                embed_resp = genai.embed_content(
+                    model=settings.GEMINI_EMBEDDING_MODEL,
+                    content=chunk,
+                    task_type="retrieval_document"
+                )
+                vectors.append(embed_resp['embedding'])
+        elif openai_client:
+            for chunk in chunks:
+                embed_resp = await openai_client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=chunk,
+                )
+                vectors.append(embed_resp.data[0].embedding)
+        else:
+            raise ValueError("No AI client configured for embeddings")
 
         # 5. Insert chunks + vectors into PostgreSQL (pgvector)
+        # Use appropriate embedding column based on provider
+        embedding_column = "embedding_gemini" if use_gemini else "embedding"
         async with db.get_session("write") as session:
             for chunk, vec in zip(chunks, vectors):
                 vector_str = "[" + ",".join(str(v) for v in vec) + "]"
                 await session.execute(
-                    text("""
+                    text(f"""
                         INSERT INTO knowledge_chunks
-                            (id, doc_id, content, embedding, created_at)
+                            (id, doc_id, content, {embedding_column}, embedding_provider, created_at)
                         VALUES
-                            (:id, :doc_id, :content, :embedding::vector, NOW())
+                            (:id, :doc_id, :content, cast(:vector as vector), :provider, NOW())
                     """),
                     {
-                        "id":        str(uuid.uuid4()),
-                        "doc_id":    doc_id,
-                        "content":   chunk,
-                        "embedding": vector_str,
+                        "id": str(uuid.uuid4()),
+                        "doc_id": doc_id,
+                        "content": chunk,
+                        "vector": vector_str,
+                        "provider": "gemini" if use_gemini else "openai"
                     },
                 )
             await session.commit()
@@ -116,8 +136,8 @@ async def _index(doc_id: str, file_url: str, file_type: str) -> None:
 
 def _extract_text(content: bytes, file_type: str) -> str:
     if file_type == "pdf":
-        import pypdf2
-        reader = pypdf2.PdfReader(io.BytesIO(content))
+       
+        reader = pypdf.PdfReader(io.BytesIO(content))
         return "\n".join(page.extract_text() for page in reader.pages)
     elif file_type == "docx":
         from docx import Document
