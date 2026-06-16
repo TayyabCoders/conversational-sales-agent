@@ -51,12 +51,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Check rate limit using SlowAPI's limiter
         try:
-            # limiter.limiter.hit returns True if allowed, False if exceeded
-            allowed = limiter.limiter.hit(client_ip, cost=1)
+            # limiter.limiter.hit expects a Request object when using key_func
+            allowed = limiter.limiter.hit(request, cost=1)
 
             if not allowed:
                 # Get window stats for headers and response
-                stats = limiter.limiter.get_window_stats(client_ip)
+                stats = limiter.limiter.get_window_stats(request)
                 retry_after = int(stats[2])  # reset_time - now
                 reset_time = datetime.fromtimestamp(stats[2], tz=timezone.utc).isoformat()
 
@@ -99,7 +99,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Add rate limit info to response headers if enabled
         if settings.RATE_LIMIT_HEADER_ENABLED:
             try:
-                stats = limiter.limiter.get_window_stats(client_ip)
+                stats = limiter.limiter.get_window_stats(request)
                 remaining = max(0, stats[0])  # remaining_requests
                 reset_time = int(stats[2])  # reset_time
 
