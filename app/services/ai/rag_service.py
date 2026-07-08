@@ -3,6 +3,7 @@ import google.generativeai as genai
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import json
+from app.configs.app_config import settings
 
 
 class RAGService:
@@ -22,7 +23,7 @@ class RAGService:
         # 1. Embed the query using configured provider
         if self.use_gemini and self.gemini_client:
             embed_resp = genai.embed_content(
-                model="text-embedding-004",
+                model=settings.GEMINI_EMBEDDING_MODEL,
                 content=query,
                 task_type="retrieval_document"
             )
@@ -72,7 +73,7 @@ class RAGService:
         """Embed a single string — used by knowledge_consumer."""
         if self.use_gemini and self.gemini_client:
             resp = genai.embed_content(
-                model="text-embedding-004",
+                model=settings.GEMINI_EMBEDDING_MODEL,
                 content=text_input,
                 task_type="retrieval_document"
             )

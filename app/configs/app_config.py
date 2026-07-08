@@ -98,7 +98,7 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_MODEL: str = Field(default="text-embedding-3-small", env="OPENAI_EMBEDDING_MODEL")
     GEMINI_API_KEY: Optional[str] = Field(default=None, env="GEMINI_API_KEY")
     GEMINI_MODEL: str = Field(default="gemini-2.5-flash", env="GEMINI_MODEL")
-    GEMINI_EMBEDDING_MODEL: str = Field(default="models/gemini-embedding-001", env="GEMINI_EMBEDDING_MODEL")
+    GEMINI_EMBEDDING_MODEL: str = Field(default="models/embedding-001", env="GEMINI_EMBEDDING_MODEL")
     USE_GEMINI: bool = Field(default=False, env="USE_GEMINI")
     AI_TEMPERATURE: float = Field(default=0.7, env="AI_TEMPERATURE")
     AI_MAX_TOKENS: int = Field(default=800, env="AI_MAX_TOKENS")
