@@ -38,37 +38,47 @@ class RabbitMQClient:
         self._connected = False
     
     async def connect(self) -> None:
-        """Initialize RabbitMQ connection"""
-        try:
-            logger.info("Connecting to RabbitMQ...")
-            
-            # Build connection URL
-            connection_url = (
-                f"amqp://{self.username}:{self.password}"
-                f"@{self.host}:{self.port}/{self.virtual_host}"
-            )
-            
-            # Connect to RabbitMQ
-            self.connection = await connect_robust(
-                connection_url,
-                timeout=30,
-                client_properties={
-                    "connection_name": "fastapi-app",
-                    "product": "FastAPI App",
-                    "version": "0.1.0",
-                }
-            )
-            
-            # Create channel
-            self.channel = await self.connection.channel()
-            await self.channel.set_qos(prefetch_count=10)
-            
-            self._connected = True
-            logger.info("RabbitMQ connection established successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to RabbitMQ: {e}")
-            raise
+        """Initialize RabbitMQ connection with retry logic"""
+        max_retries = 10
+        base_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Connecting to RabbitMQ... (attempt {attempt + 1}/{max_retries})")
+                
+                # Build connection URL
+                connection_url = (
+                    f"amqp://{self.username}:{self.password}"
+                    f"@{self.host}:{self.port}/{self.virtual_host}"
+                )
+                
+                # Connect to RabbitMQ
+                self.connection = await connect_robust(
+                    connection_url,
+                    timeout=30,
+                    client_properties={
+                        "connection_name": "fastapi-app",
+                        "product": "FastAPI App",
+                        "version": "0.1.0",
+                    }
+                )
+                
+                # Create channel
+                self.channel = await self.connection.channel()
+                await self.channel.set_qos(prefetch_count=10)
+                
+                self._connected = True
+                logger.info("RabbitMQ connection established successfully")
+                return
+                
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to connect to RabbitMQ after {max_retries} attempts: {e}")
+                    raise
+                
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"RabbitMQ connection failed (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}")
+                await asyncio.sleep(delay)
     
     async def disconnect(self) -> None:
         """Close RabbitMQ connection"""
