@@ -19,16 +19,16 @@ class ConversationService:
     async def list_conversations(
         self,
         status: Optional[str] = None,
-        channel: Optional[str] = None,
+        channel_id=None,
         limit: int = 50,
         offset: int = 0,
     ) -> Dict[str, Any]:
         try:
             logger.info("ConversationService: Listing conversations...")
-            
+
             conversations = await self.conversation_repository.list_all(
                 status=status,
-                channel=channel,
+                channel_id=channel_id,
                 limit=limit,
                 offset=offset,
             )

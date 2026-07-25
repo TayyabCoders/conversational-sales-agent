@@ -45,7 +45,7 @@ class LeadScorer:
         try:
             logger.info(f"LeadScorer: Updating lead {lead_id} from message...")
 
-            lead = await self.repo.get_by_id(lead_id)
+            lead = await self.repo.findById(lead_id)
             if not lead:
                 logger.warning(f"LeadScorer: Lead {lead_id} not found.")
                 return

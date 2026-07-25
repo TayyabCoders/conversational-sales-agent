@@ -2,84 +2,86 @@ from fastapi import Request, BackgroundTasks, HTTPException
 from fastapi.responses import PlainTextResponse
 from dependency_injector.wiring import inject, Provide
 from app.mediator.message_mediator import MessageMediator
-from app.schemas.webhook_schema import WhatsAppWebhookPayload, InboundMessage
-from app.utils.security_util import verify_whatsapp_signature
+from app.services.channels.adapters import get_webhook_adapter
 from structlog import get_logger
-import os
+from typing import Optional
 
 logger = get_logger(__name__)
 
 
 class WebhookController:
     @inject
-    def __init__(self, message_mediator = Provide["message_mediator"]):
-        self.mediator = message_mediator
-
-    async def handle_whatsapp(
+    def __init__(
         self,
+        message_mediator=Provide["message_mediator"],
+        channel_repository=Provide["channel_repository"],
+    ):
+        self.mediator = message_mediator
+        self.channel_repo = channel_repository
+
+    async def handle_inbound(
+        self,
+        channel_type: str,
         request: Request,
         background_tasks: BackgroundTasks,
     ):
         try:
-            logger.info("WebhookController: Handling WhatsApp webhook...")
+            logger.info("WebhookController: handling inbound message", channel_type=channel_type)
 
-            # 1. Verify Meta HMAC-SHA256 — raises 403 if invalid
+            channel = await self.channel_repo.get_active_by_type(channel_type)
+            if not channel:
+                raise HTTPException(404, f"No active channel of type {channel_type!r} registered")
+
+            adapter = get_webhook_adapter(channel)
             body = await request.body()
-            signature = request.headers.get("X-Hub-Signature-256", "")
-            verify_whatsapp_signature(body, signature)
+            await adapter.verify_signature(body, dict(request.headers))
 
-            # 2. Parse Meta payload
             data = await request.json()
-            payload = WhatsAppWebhookPayload(**data)
+            messages = await adapter.parse_messages(data)
 
-            # 3. Extract each message and queue (non-blocking)
-            for entry in payload.entry:
-                for change in entry.changes:
-                    for msg in (change.value.messages or []):
-                        inbound = InboundMessage(
-                            from_number=msg.from_,
-                            message_id=msg.id,
-                            text=msg.text.body if msg.text else None,
-                            media_type=msg.type if msg.type != "text" else None,
-                            media_id=(msg.audio or msg.image or {}).get("id") if msg.type != "text" else None,
-                            contact_name=(change.value.contacts or [{}])[0].get("profile", {}).get("name"),
-                        )
-                        background_tasks.add_task(
-                            self.mediator.handle_inbound,
-                            message=inbound,
-                            channel="whatsapp",
-                        )
+            for message in messages:
+                background_tasks.add_task(
+                    self.mediator.handle_inbound,
+                    message=message,
+                    channel_id=channel.id,
+                )
 
-            # MUST return 200 fast — Meta retries if it doesn't get 200
-            logger.info("WebhookController: WhatsApp webhook handled successfully.")
+            logger.info("WebhookController: queued messages", channel_type=channel_type, count=len(messages))
             return {"status": "ok"}
 
+        except HTTPException:
+            raise
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         except Exception as e:
-            logger.error("WebhookController: Failed to handle WhatsApp webhook.", exc_info=True)
-            raise e
+            logger.error("WebhookController: failed to handle inbound", channel_type=channel_type, exc_info=True)
+            raise
 
-    async def verify_whatsapp(
+    async def verify_subscription(
         self,
-        mode: str,
-        challenge: str,
-        verify_token: str,
+        channel_type: str,
+        mode: Optional[str],
+        challenge: Optional[str],
+        token: Optional[str],
     ):
         try:
-            logger.info("WebhookController: Verifying WhatsApp webhook...")
+            logger.info("WebhookController: verifying subscription", channel_type=channel_type)
 
-            # Use environment variable for verify token (tenant logic excluded)
-            expected_token = os.getenv("WHATSAPP_VERIFY_TOKEN")
-            if not expected_token:
-                raise HTTPException(500, "WhatsApp verify token not configured")
+            channel = await self.channel_repo.get_active_by_type(channel_type)
+            if not channel:
+                raise HTTPException(404, f"No active channel of type {channel_type!r} registered")
 
-            if verify_token != expected_token:
-                raise HTTPException(403, "Invalid verify token")
+            adapter = get_webhook_adapter(channel)
+            result = await adapter.verify_subscription(mode or "", challenge or "", token or "")
 
-            logger.info("WebhookController: WhatsApp webhook verified successfully.")
-            return PlainTextResponse(challenge)
+            if result is None:
+                raise HTTPException(404, f"Channel type {channel_type!r} does not support hub verification")
+
+            logger.info("WebhookController: subscription verified", channel_type=channel_type)
+            return PlainTextResponse(result)
 
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("WebhookController: Failed to verify WhatsApp webhook.", exc_info=True)
-            raise e
+            logger.error("WebhookController: failed to verify subscription", channel_type=channel_type, exc_info=True)
+            raise

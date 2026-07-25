@@ -16,16 +16,16 @@ class ConversationMediator:
     async def list_conversations(
         self,
         status: str = None,
-        channel: str = None,
+        channel_id=None,
         limit: int = 50,
         offset: int = 0,
     ):
         try:
             logger.info("ConversationMediator: Listing conversations...")
-            
+
             result = await self.conversation_service.list_conversations(
                 status=status,
-                channel=channel,
+                channel_id=channel_id,
                 limit=limit,
                 offset=offset,
             )

@@ -6,7 +6,7 @@ from datetime import datetime
 
 class LeadResponse(BaseModel):
     id: UUID
-    customer_phone: str
+    customer_identifier: str
     customer_name: Optional[str] = None
     customer_email: Optional[str] = None
     score: int

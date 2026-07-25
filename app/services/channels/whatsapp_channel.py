@@ -6,10 +6,18 @@ logger = get_logger(__name__)
 
 
 class WhatsAppChannel(BaseChannel):
-    def __init__(self, api_version: str, app_secret: str):
+    def __init__(
+        self,
+        api_version: str,
+        app_secret: str,
+        phone_number_id: str = None,
+        access_token: str = None,
+    ):
         self.api_version = api_version
         self.base_url = f"https://graph.facebook.com/{api_version}"
         self.app_secret = app_secret
+        self._phone_number_id = phone_number_id
+        self._access_token = access_token
 
     async def send_message(
         self,
@@ -22,9 +30,12 @@ class WhatsAppChannel(BaseChannel):
         try:
             logger.info(f"WhatsAppChannel: Sending message to {recipient}...")
 
-            url = f"{self.base_url}/{phone_number_id}/messages"
+            pid   = phone_number_id or self._phone_number_id
+            token = access_token or self._access_token
+
+            url = f"{self.base_url}/{pid}/messages"
             headers = {
-                "Authorization": f"Bearer {access_token}",
+                "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             }
             payload = {
@@ -50,17 +61,19 @@ class WhatsAppChannel(BaseChannel):
         try:
             logger.info(f"WhatsAppChannel: Downloading media {media_id}...")
 
+            token = access_token or self._access_token
+
             # Step 1: Get media URL
             url_resp = await httpx.AsyncClient().get(
                 f"{self.base_url}/{media_id}",
-                headers={"Authorization": f"Bearer {access_token}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
             media_url = url_resp.json()["url"]
 
             # Step 2: Download actual file
             file_resp = await httpx.AsyncClient().get(
                 media_url,
-                headers={"Authorization": f"Bearer {access_token}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
             content = file_resp.content
 

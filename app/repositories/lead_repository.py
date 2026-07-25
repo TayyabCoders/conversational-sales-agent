@@ -17,7 +17,7 @@ class LeadRepository(BaseRepository[Lead]):
     async def get_or_create(
         self,
         conversation_id: str,
-        customer_phone: str,
+        customer_identifier: str,
     ) -> Lead:
         try:
             logger.info("LeadRepository: Getting or creating lead...")
@@ -31,7 +31,7 @@ class LeadRepository(BaseRepository[Lead]):
             # Create new lead
             lead_data = {
                 "conversation_id": conversation_id,
-                "customer_phone": customer_phone,
+                "customer_identifier": customer_identifier,
                 "score": 0,
                 "stage": "cold",
             }

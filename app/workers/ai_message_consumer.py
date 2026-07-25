@@ -3,7 +3,6 @@ Long-lived RabbitMQ consumer for AI message processing.
 Started inside FastAPI lifespan via asyncio.create_task().
 """
 import asyncio
-import logging
 from app.configs.messaging_config import RabbitMQClient
 from app.configs.app_config import settings
 from app.services.ai.agent_service import AgentService
@@ -13,9 +12,10 @@ from app.services.ai.prompt_builder import PromptBuilder
 from app.services.ai.guardrails_service import GuardrailsService
 from app.services.ai.lead_scorer import LeadScorer
 from app.services.ai.human_behavior_service import calculate_typing_delay
-from app.services.channels.whatsapp_channel import WhatsAppChannel
+from app.services.channels import build_channel_client
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.lead_repository import LeadRepository
+from app.repositories.channel_repository import ChannelRepository
 from structlog import get_logger
 
 logger = get_logger(__name__)
@@ -38,19 +38,19 @@ async def start_ai_message_consumer(rabbitmq: RabbitMQClient) -> None:
 async def handle_message(payload: dict) -> None:
     """
     Called by RabbitMQClient for every message on ai.messages.queue.
-    payload keys: conversation_id, lead_id, message_text, media_type, media_id, channel
+    payload keys: conversation_id, lead_id, message_text, media_type, media_id, channel_id
     """
     conversation_id = payload["conversation_id"]
     lead_id         = payload["lead_id"]
     message_text    = payload["message_text"]
     media_type      = payload.get("media_type")
     media_id        = payload.get("media_id")
-    channel         = payload["channel"]
+    channel_id      = payload["channel_id"]
 
     try:
         await _process(
             conversation_id, lead_id,
-            message_text, media_type, media_id, channel,
+            message_text, media_type, media_id, channel_id,
         )
     except Exception as exc:
         logger.error(f"AI message processing failed: {exc}", exc_info=True)
@@ -63,29 +63,28 @@ async def _process(
     message_text: str,
     media_type: str | None,
     media_id: str | None,
-    channel: str,
+    channel_id: str,
 ) -> None:
 
     # --- Repositories ---
-    conv_repo   = ConversationRepository()
-    lead_repo   = LeadRepository()
+    conv_repo    = ConversationRepository()
+    lead_repo    = LeadRepository()
+    channel_repo = ChannelRepository()
 
-    channel_client = WhatsAppChannel(
-        api_version = settings.WHATSAPP_API_VERSION,
-        app_secret  = settings.META_APP_SECRET,
-    )
+    # --- Load channel record from DB → build client ---
+    channel_record = await channel_repo.findById(channel_id)
+    if not channel_record:
+        logger.error(f"Channel {channel_id} not found in DB, cannot send response")
+        return
+
+    channel_client = build_channel_client(channel_record)
 
     # --- Handle voice or image if media present ---
-    # Note: Media handling requires tenant-specific access tokens, skipped for now
     if media_type == "audio" and media_id:
-        logger.info(f"Audio media detected for conversation {conversation_id} - transcription skipped (tenant logic excluded)")
-        # audio_bytes  = await channel_client.download_media(media_id, access_token=tenant.whatsapp_access_token)
-        # message_text = await _transcribe_voice(audio_bytes)
+        logger.info(f"Audio media detected for conversation {conversation_id} - transcription skipped")
 
     elif media_type == "image" and media_id:
-        logger.info(f"Image media detected for conversation {conversation_id} - description skipped (tenant logic excluded)")
-        # image_bytes  = await channel_client.download_media(media_id, access_token=tenant.whatsapp_access_token)
-        # message_text = await _describe_image(image_bytes, message_text)
+        logger.info(f"Image media detected for conversation {conversation_id} - description skipped")
 
     # --- Check explicit escalation request ---
     guardrails = GuardrailsService()
@@ -98,11 +97,9 @@ async def _process(
     import google.generativeai as genai
     from app.di.container import container
 
-    # Use read session for RAG (will use replica if available)
     db = container.resolve('database')
     db_session = db.get_session("read")
 
-    # Initialize clients based on feature flag
     use_gemini = settings.USE_GEMINI
     openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY) if not use_gemini else None
     gemini_client = None
@@ -112,19 +109,18 @@ async def _process(
 
     agent = AgentService(
         rag            = RAGService(
-                             db = db_session,
-                             openai = openai_client,
-                             gemini_client = gemini_client,
-                             use_gemini = use_gemini,
+                             db=db_session,
+                             openai=openai_client,
+                             gemini_client=gemini_client,
+                             use_gemini=use_gemini,
                          ),
-        memory         = MemoryService(redis=..., window=settings.AI_MEMORY_WINDOW),
+        memory         = MemoryService(),
         prompt_builder = PromptBuilder(),
         guardrails     = guardrails,
         openai         = openai_client,
         gemini_client  = gemini_client,
     )
 
-    # Use default AI config (tenant logic excluded)
     ai_config = {
         "id": "default",
         "persona_name": "Assistant",
@@ -138,9 +134,9 @@ async def _process(
     }
 
     response_text, confidence = await agent.process_message(
-        conversation_id = conversation_id,
-        tenant_config   = ai_config,
-        message         = message_text,
+        conversation_id=conversation_id,
+        tenant_config=ai_config,
+        message=message_text,
     )
 
     # --- Low confidence → escalate ---
@@ -156,37 +152,26 @@ async def _process(
     # --- Human-like delay ---
     await asyncio.sleep(calculate_typing_delay(response_text))
 
-    # --- Send via WhatsApp ---
-    # Get customer phone number from conversation
-    conversation = await conv_repo.get_by_id(conversation_id)
+    # --- Send via channel ---
+    conversation = await conv_repo.findById(conversation_id)
     if not conversation:
         logger.error(f"Conversation {conversation_id} not found, cannot send response")
         return
 
-    customer_phone = conversation.customer_phone
-
-    # Check if WhatsApp credentials are configured
-    if not settings.WHATSAPP_PHONE_NUMBER_ID or not settings.WHATSAPP_ACCESS_TOKEN:
-        logger.warning(f"WhatsApp credentials not configured, skipping message send to {customer_phone}")
-        raise ValueError("WhatsApp credentials not configured")
+    sender_id = conversation.customer_identifier
 
     try:
-        await channel_client.send_message(
-            recipient=customer_phone,
-            message=response_text,
-            phone_number_id=settings.WHATSAPP_PHONE_NUMBER_ID,
-            access_token=settings.WHATSAPP_ACCESS_TOKEN,
-        )
-        logger.info(f"WhatsApp message sent successfully to {customer_phone}")
+        await channel_client.send_message(recipient=sender_id, message=response_text)
+        logger.info(f"Message sent to {sender_id} via {channel_record.type} ({channel_record.name})")
     except Exception as e:
-        logger.error(f"Failed to send WhatsApp message to {customer_phone}: {e}", exc_info=True)
+        logger.error(f"Failed to send message to {sender_id}: {e}", exc_info=True)
         raise  # Re-raise to trigger RabbitMQ retry/DLQ
 
     # --- Persist AI response (only after successful send) ---
     await conv_repo.add_message(
-        conversation_id = conversation_id,
-        role            = "assistant",
-        content         = response_text,
+        conversation_id=conversation_id,
+        role="assistant",
+        content=response_text,
     )
 
     logger.info(f"AI response processed for conversation {conversation_id}")
@@ -198,55 +183,45 @@ async def _escalate(conversation_id: str, conv_repo: ConversationRepository) -> 
 
 
 async def _transcribe_voice(audio_bytes: bytes) -> str:
-    """Transcribe audio using Gemini (if enabled) or OpenAI Whisper"""
     import io
-    from app.configs.app_config import settings
-
     if settings.USE_GEMINI:
         import google.generativeai as genai
         genai.configure(api_key=settings.GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-1.5-pro')
-        response = await model.generate_content_async(
-            [
-                {"mime_type": "audio/ogg", "data": audio_bytes},
-                "Transcribe this audio"
-            ]
-        )
+        response = await model.generate_content_async([
+            {"mime_type": "audio/ogg", "data": audio_bytes},
+            "Transcribe this audio",
+        ])
         return response.text
     else:
         from openai import AsyncOpenAI
         transcript = await AsyncOpenAI().audio.transcriptions.create(
-            model = "whisper-1",
-            file  = ("voice.ogg", io.BytesIO(audio_bytes), "audio/ogg"),
+            model="whisper-1",
+            file=("voice.ogg", io.BytesIO(audio_bytes), "audio/ogg"),
         )
         return transcript.text
 
 
 async def _describe_image(image_bytes: bytes, customer_text: str) -> str:
-    """Describe image using Gemini (if enabled) or OpenAI GPT-4o"""
     import base64
-    from app.configs.app_config import settings
-
     if settings.USE_GEMINI:
         import google.generativeai as genai
         genai.configure(api_key=settings.GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-1.5-pro')
-        response = await model.generate_content_async(
-            [
-                {"mime_type": "image/jpeg", "data": image_bytes},
-                customer_text or "What is in this image?"
-            ]
-        )
+        response = await model.generate_content_async([
+            {"mime_type": "image/jpeg", "data": image_bytes},
+            customer_text or "What is in this image?",
+        ])
         return response.text
     else:
         from openai import AsyncOpenAI
-        b64  = base64.b64encode(image_bytes).decode()
+        b64 = base64.b64encode(image_bytes).decode()
         resp = await AsyncOpenAI().chat.completions.create(
-            model    = "gpt-4o",
-            messages = [{"role": "user", "content": [
+            model="gpt-4o",
+            messages=[{"role": "user", "content": [
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                {"type": "text",      "text": customer_text or "What is in this image?"},
+                {"type": "text", "text": customer_text or "What is in this image?"},
             ]}],
-            max_tokens = 500,
+            max_tokens=500,
         )
         return resp.choices[0].message.content

@@ -1,127 +1,97 @@
-# API Testing Guide with Postman
+# API Testing Guide — Postman
 
-This guide provides step-by-step instructions for testing the Conversational Sales Agent APIs using Postman.
+This guide walks through every API endpoint in the correct **operational order**: authenticate first, configure your channel, upload knowledge, then test the live message flow.
+
+---
 
 ## Table of Contents
-- [Prerequisites](#prerequisites)
-- [Setup](#setup)
-- [Authentication Endpoints](#authentication-endpoints)
-- [Conversation Endpoints](#conversation-endpoints)
-- [Knowledge Base Endpoints](#knowledge-base-endpoints)
-- [Lead Management Endpoints](#lead-management-endpoints)
-- [Webhook Endpoints](#webhook-endpoints)
+
+1. [Prerequisites & Setup](#1-prerequisites--setup)
+2. [Authentication](#2-authentication)
+3. [Channel Management](#3-channel-management)
+4. [Knowledge Base](#4-knowledge-base)
+5. [Webhook — Verify & Test](#5-webhook--verify--test)
+6. [Conversations](#6-conversations)
+7. [Lead Management](#7-lead-management)
+8. [Quick Reference](#quick-reference)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
-## Prerequisites
+## 1. Prerequisites & Setup
 
-- **Postman** installed (download from [https://www.postman.com/downloads/](https://www.postman.com/downloads/))
-- **API Server** running locally (default: `http://localhost:8000`)
-- **Database** and **RabbitMQ** services running
+**Required services running:**
+- API server (default: `http://localhost:8000`)
+- PostgreSQL + RabbitMQ + Redis
 
----
-
-## Setup
-
-### 1. Start the API Server
-
+**Start the server:**
 ```bash
-# Navigate to project directory
-cd d:\360ExpertsTrainee\Project\sales agent autonomous
-
-# Start the server (adjust command based on your setup)
 python -m app.main
 ```
 
-The server will start on `http://localhost:8000` (or as configured in your settings).
+**Interactive API docs:**
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
 
-### 2. Access API Documentation
+### Postman Environment
 
-Open your browser and navigate to:
-- **Swagger UI**: `http://localhost:8000/docs`
-- **ReDoc**: `http://localhost:8000/redoc`
+Create an environment named `Sales Agent API` with these variables:
 
-These provide interactive API documentation.
+| Variable | Initial Value | Description |
+|---|---|---|
+| `base_url` | `http://localhost:8000` | API base URL |
+| `access_token` | *(empty)* | Set after login |
+| `refresh_token` | *(empty)* | Set after login |
+| `channel_id` | *(empty)* | Set after listing channels |
 
-### 3. Configure Postman Environment (Optional)
-
-Create an environment in Postman to store variables:
-
-1. Click the gear icon (Manage Environments) → Add
-2. Name it: `Sales Agent API`
-3. Add variables:
-   - `base_url`: `http://localhost:8000`
-   - `access_token`: (leave empty, will be set after login)
-   - `refresh_token`: (leave empty, will be set after login)
+Set the collection-level **Authorization** to:
+- Type: `Bearer Token`
+- Token: `{{access_token}}`
 
 ---
 
-## Authentication Endpoints
+## 2. Authentication
 
-Base URL: `{{base_url}}/api/v1/auth`
+> **Do this first.** All subsequent requests need `{{access_token}}` in the Authorization header.
 
-### 1. Register User
+### 2.1 Register
 
-**Endpoint**: `POST /api/v1/auth/register`
-
-**Purpose**: Create a new user account.
-
-**Steps**:
-1. Create a new request in Postman
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/auth/register`
-4. Go to **Body** tab → select **raw** → **JSON**
-5. Paste the following JSON:
+**`POST /api/v1/auth/register`**
 
 ```json
 {
-  "username": "testuser",
-  "email": "testuser@example.com",
+  "username": "admin",
+  "email": "admin@example.com",
   "password": "SecurePassword123!"
 }
 ```
 
-6. Click **Send**
-
-**Expected Response** (201 Created):
+Expected response `201 Created`:
 ```json
 {
   "id": "uuid-here",
-  "username": "testuser",
-  "email": "testuser@example.com",
+  "username": "admin",
+  "email": "admin@example.com",
   "role": "user",
   "is_active": true,
-  "created_at": "2024-01-01T00:00:00Z",
-  "updated_at": null
+  "created_at": "2024-01-01T00:00:00Z"
 }
 ```
 
 ---
 
-### 2. Login
+### 2.2 Login ← **Save the tokens**
 
-**Endpoint**: `POST /api/v1/auth/login`
-
-**Purpose**: Authenticate user and receive access tokens.
-
-**Steps**:
-1. Create a new request
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/auth/login`
-4. Go to **Body** tab → select **raw** → **JSON**
-5. Paste the following JSON:
+**`POST /api/v1/auth/login`**
 
 ```json
 {
-  "email": "testuser@example.com",
+  "email": "admin@example.com",
   "password": "SecurePassword123!"
 }
 ```
 
-6. Click **Send**
-7. **Save the tokens** from the response for future requests
-
-**Expected Response** (200 OK):
+Expected response `200 OK`:
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
@@ -130,22 +100,15 @@ Base URL: `{{base_url}}/api/v1/auth`
 }
 ```
 
-**Tip**: In Postman, click the **eye icon** next to the response to extract the `access_token` and `refresh_token` values and save them to your environment variables.
+**Action:** Copy both values into the Postman environment variables `access_token` and `refresh_token`.
 
 ---
 
-### 3. Refresh Access Token
+### 2.3 Refresh Access Token
 
-**Endpoint**: `POST /api/v1/auth/refresh`
+**`POST /api/v1/auth/refresh`**
 
-**Purpose**: Get a new access token using a valid refresh token.
-
-**Steps**:
-1. Create a new request
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/auth/refresh`
-4. Go to **Body** tab → select **raw** → **JSON**
-5. Paste the following JSON (replace with your actual refresh token):
+Use this when the access token expires (default TTL: 30 min).
 
 ```json
 {
@@ -153,31 +116,20 @@ Base URL: `{{base_url}}/api/v1/auth`
 }
 ```
 
-6. Click **Send**
-
-**Expected Response** (200 OK):
+Expected response `200 OK`:
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer",
-  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer"
 }
 ```
 
 ---
 
-### 4. Logout
+### 2.4 Logout
 
-**Endpoint**: `POST /api/v1/auth/logout`
-
-**Purpose**: Logout user and invalidate refresh token.
-
-**Steps**:
-1. Create a new request
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/auth/logout`
-4. Go to **Body** tab → select **raw** → **JSON**
-5. Paste the following JSON:
+**`POST /api/v1/auth/logout`**
 
 ```json
 {
@@ -185,9 +137,7 @@ Base URL: `{{base_url}}/api/v1/auth`
 }
 ```
 
-6. Click **Send**
-
-**Expected Response** (200 OK):
+Expected response `200 OK`:
 ```json
 {
   "message": "Successfully logged out"
@@ -196,49 +146,29 @@ Base URL: `{{base_url}}/api/v1/auth`
 
 ---
 
-### 5. Request Password Reset
+### 2.5 Request Password Reset
 
-**Endpoint**: `POST /api/v1/auth/password-reset/request`
-
-**Purpose**: Request a password reset token via email.
-
-**Steps**:
-1. Create a new request
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/auth/password-reset/request`
-4. Go to **Body** tab → select **raw** → **JSON**
-5. Paste the following JSON:
+**`POST /api/v1/auth/password-reset/request`**
 
 ```json
 {
-  "email": "testuser@example.com"
+  "email": "admin@example.com"
 }
 ```
 
-6. Click **Send**
-
-**Expected Response** (200 OK):
+Expected response `200 OK`:
 ```json
 {
   "message": "Password reset requested successfully",
-  "reset_token": "token-here"  // Only in development/testing
+  "reset_token": "token-here"
 }
 ```
 
 ---
 
-### 6. Reset Password
+### 2.6 Confirm Password Reset
 
-**Endpoint**: `POST /api/v1/auth/password-reset/confirm`
-
-**Purpose**: Reset password using a valid reset token.
-
-**Steps**:
-1. Create a new request
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/auth/password-reset/confirm`
-4. Go to **Body** tab → select **raw** → **JSON**
-5. Paste the following JSON (replace with actual token):
+**`POST /api/v1/auth/password-reset/confirm`**
 
 ```json
 {
@@ -247,9 +177,7 @@ Base URL: `{{base_url}}/api/v1/auth`
 }
 ```
 
-6. Click **Send**
-
-**Expected Response** (200 OK):
+Expected response `200 OK`:
 ```json
 {
   "message": "Password reset successfully"
@@ -258,184 +186,311 @@ Base URL: `{{base_url}}/api/v1/auth`
 
 ---
 
-## Conversation Endpoints
+## 3. Channel Management
 
-Base URL: `{{base_url}}/api/v1/conversation`
+> **Do this second.** A channel record must exist in the database before webhooks can receive messages. A default WhatsApp channel is seeded by the migration, but you must set its credentials.
 
-**Note**: These endpoints may require authentication. Add the following header to protected requests:
-- **Header**: `Authorization`
-- **Value**: `Bearer {{access_token}}`
+**Header required:** `Authorization: Bearer {{access_token}}`
 
-### 1. List Conversations
+### 3.1 List Channels ← **Save the channel ID**
 
-**Endpoint**: `GET /api/v1/conversation/conversations`
+**`GET /api/v1/channel/channels`**
 
-**Purpose**: Retrieve a list of conversations with optional filters.
-
-**Steps**:
-1. Create a new request
-2. Set method to `GET`
-3. Set URL to `{{base_url}}/api/v1/conversation/conversations`
-4. Go to **Params** tab and add optional query parameters:
-   - `status`: Filter by status (e.g., `active`, `closed`)
-   - `channel`: Filter by channel (e.g., `whatsapp`, `web`)
-   - `limit`: Number of results (default: 50, max: 100)
-   - `offset`: Pagination offset (default: 0)
-5. Add Authorization header if required
-6. Click **Send**
-
-**Example URL**:
-```
-http://localhost:8000/api/v1/conversation/conversations?status=active&channel=whatsapp&limit=10
-```
-
-**Expected Response** (200 OK):
+Expected response `200 OK`:
 ```json
 [
   {
-    "id": "uuid-here",
-    "channel": "whatsapp",
-    "customer_phone": "+1234567890",
-    "customer_name": "John Doe",
-    "status": "active",
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "type": "whatsapp",
+    "name": "Default WhatsApp",
+    "is_active": true,
     "created_at": "2024-01-01T00:00:00Z"
   }
 ]
 ```
 
+**Action:** Copy the `id` value into the Postman environment variable `channel_id`.
+
+> **Note:** The `config` field (which contains credentials) is intentionally excluded from all responses for security.
+
 ---
 
-### 2. Get Specific Conversation
+### 3.2 Get Your WhatsApp Credentials from Meta
 
-**Endpoint**: `GET /api/v1/conversation/conversations/{conversation_id}`
+Before you can configure the channel, you need four values from Meta. Here is the full step-by-step process to get them.
 
-**Purpose**: Retrieve details of a specific conversation including messages.
+---
 
-**Steps**:
-1. Create a new request
-2. Set method to `GET`
-3. Set URL to `{{base_url}}/api/v1/conversation/conversations/{conversation_id}`
-4. Replace `{conversation_id}` with an actual UUID
-5. Add Authorization header if required
-6. Click **Send**
+#### Step A — Create a Facebook Business Account
 
-**Example URL**:
+1. Go to **[business.facebook.com](https://business.facebook.com)**
+2. Click **Create Account**
+3. Fill in your business name, your name, and your business email
+4. Verify your email
+
+> If you already have a Facebook personal account, you can use it to create a Business account — they are separate things.
+
+---
+
+#### Step B — Create a Meta Developer Account
+
+1. Go to **[developers.facebook.com](https://developers.facebook.com)**
+2. Click **Get Started** (top right)
+3. Log in with your Facebook account
+4. Accept the Meta Platform Policies
+5. You are now a Meta developer
+
+---
+
+#### Step C — Create a Meta App
+
+1. From the Meta Developer dashboard, click **My Apps → Create App**
+2. For **Use case**, select **Other** → click **Next**
+3. For **App type**, select **Business** → click **Next**
+4. Fill in:
+   - **App name**: e.g., `Sales Agent`
+   - **App contact email**: your email
+   - **Business account**: select the one you created in Step A
+5. Click **Create App**
+
+---
+
+#### Step D — Add WhatsApp to Your App
+
+1. Inside your new app dashboard, scroll down to find **WhatsApp**
+2. Click **Set up** on the WhatsApp card
+3. You are now in the **WhatsApp Getting Started** section
+
+---
+
+#### Step E — Get `phone_number_id` and Temporary `access_token`
+
+1. In the left sidebar: **WhatsApp → API Setup**
+2. Under **Step 1 — Select phone numbers**, you will see a test phone number already provided by Meta (free, no SIM required for testing)
+3. From this page, note down:
+
+   - **Phone Number ID** → shown just below the "From" dropdown (looks like: `102938475612345`)
+   - **Temporary access token** → shown in the box under "Step 1". Click the copy button.
+
+> **Important:** The temporary token expires in **24 hours**. It is fine for testing, but you need a permanent token for production (see Step F below).
+
+---
+
+#### Step F — Create a Permanent `access_token` (for Production)
+
+1. Go to **[business.facebook.com/settings](https://business.facebook.com/settings)**
+2. In the left sidebar: **Users → System Users**
+3. Click **Add** → name it `sales-agent-bot` → Role: **Admin** → **Create System User**
+4. Click **Generate New Token**:
+   - Select your app from the dropdown
+   - Permissions to enable: `whatsapp_business_messaging`, `whatsapp_business_management`
+   - Click **Generate Token**
+5. **Copy and save this token immediately** — Meta only shows it once
+
+This token does not expire.
+
+---
+
+#### Step G — Get `app_secret`
+
+1. In your app dashboard, go to **Settings → Basic** (left sidebar)
+2. Find the **App Secret** field → click **Show**
+3. Enter your Facebook password to reveal it
+4. Copy the value (looks like: `abc123def456...`)
+
+---
+
+#### Step H — Choose Your `verify_token`
+
+The `verify_token` is **not given by Meta — you create it yourself**. It is any string you choose. Meta sends it back to your server when verifying the webhook, and your server checks that it matches.
+
+Pick any string, for example:
 ```
-http://localhost:8000/api/v1/conversation/conversations/123e4567-e89b-12d3-a456-426614174000
+my-sales-agent-webhook-2024
 ```
 
-**Expected Response** (200 OK):
+Write it down — you will enter the same string in both Meta's dashboard and your channel config.
+
+---
+
+#### Step I — Expose Your Local Server (for Testing)
+
+Meta's webhook verification requires a **public HTTPS URL**. For local development, use **ngrok**:
+
+1. Install ngrok: [ngrok.com/download](https://ngrok.com/download)
+2. Run:
+   ```bash
+   ngrok http 8000
+   ```
+3. Copy the generated HTTPS URL, e.g.: `https://abc123.ngrok-free.app`
+4. Your webhook URL will be:
+   ```
+   https://abc123.ngrok-free.app/api/v1/webhook/webhooks/whatsapp
+   ```
+
+> For production, use your real domain with a valid SSL certificate.
+
+---
+
+#### Step J — Register the Webhook URL in Meta Dashboard
+
+1. In your app dashboard: **WhatsApp → Configuration** (left sidebar)
+2. Under **Webhook**, click **Edit**
+3. Fill in:
+   - **Callback URL**: `https://your-ngrok-url.ngrok-free.app/api/v1/webhook/webhooks/whatsapp`
+   - **Verify token**: the string you chose in Step H
+4. Click **Verify and save** — Meta will call your server's GET endpoint to verify
+5. After saving, click **Manage** next to Webhook fields
+6. Enable the **`messages`** subscription checkbox → click **Done**
+
+---
+
+#### Summary — Your Credentials
+
+You now have everything needed:
+
+| Config Key | Where it comes from |
+|---|---|
+| `phone_number_id` | WhatsApp → API Setup → shown under "From" dropdown |
+| `access_token` | Temp: WhatsApp → API Setup. Permanent: Business Settings → System Users |
+| `app_secret` | App Dashboard → Settings → Basic → App Secret |
+| `verify_token` | You chose this in Step H |
+| `api_version` | Use `v20.0` (or check [developers.facebook.com/docs/whatsapp](https://developers.facebook.com/docs/whatsapp) for latest) |
+
+---
+
+### 3.2 Configure Channel Credentials
+
+**`PATCH /api/v1/channel/channels/{{channel_id}}`**
+
+Now paste the credentials you collected above into the request body:
+
 ```json
 {
-  "id": "uuid-here",
-  "channel": "whatsapp",
-  "customer_phone": "+1234567890",
-  "customer_name": "John Doe",
-  "status": "active",
-  "created_at": "2024-01-01T00:00:00Z",
-  "messages": [
-    {
-      "id": "message-uuid",
-      "role": "user",
-      "content": "Hello, I'm interested in your product",
-      "media_type": null,
-      "media_url": null,
-      "tokens_used": 15,
-      "latency_ms": 250,
-      "created_at": "2024-01-01T00:00:00Z"
-    }
-  ]
+  "config": {
+    "phone_number_id": "102938475612345",
+    "access_token": "EAABsbCS...",
+    "app_secret": "abc123def456...",
+    "verify_token": "my-sales-agent-webhook-2024",
+    "api_version": "v20.0"
+  }
+}
+```
+
+Expected response `200 OK`:
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "type": "whatsapp",
+  "name": "Default WhatsApp",
+  "is_active": true,
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+> The config is stored in the database and excluded from all API responses for security. Only the server can read it internally.
+
+---
+
+### 3.3 Get Specific Channel
+
+**`GET /api/v1/channel/channels/{{channel_id}}`**
+
+Expected response `200 OK`:
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "type": "whatsapp",
+  "name": "Default WhatsApp",
+  "is_active": true,
+  "created_at": "2024-01-01T00:00:00Z"
 }
 ```
 
 ---
 
-### 3. Takeover Conversation
+### 3.4 Create a New Channel
 
-**Endpoint**: `POST /api/v1/conversation/conversations/{conversation_id}/takeover`
+**`POST /api/v1/channel/channels`**
 
-**Purpose**: Human agent takes over a conversation from the AI.
-
-**Steps**:
-1. Create a new request
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/conversation/conversations/{conversation_id}/takeover`
-4. Replace `{conversation_id}` with an actual UUID
-5. Go to **Body** tab → select **raw** → **JSON**
-6. Paste the following JSON:
+Use this to add additional channels (e.g., a second WhatsApp number, Instagram, Telegram).
 
 ```json
 {
-  "agent_id": "agent-uuid-here"
+  "type": "whatsapp",
+  "name": "Support Line",
+  "config": {
+    "phone_number_id": "SECOND_PHONE_NUMBER_ID",
+    "access_token": "SECOND_ACCESS_TOKEN",
+    "app_secret": "SECOND_APP_SECRET",
+    "verify_token": "SECOND_VERIFY_TOKEN",
+    "api_version": "v20.0"
+  }
 }
 ```
 
-7. Add Authorization header
-8. Click **Send**
+Valid `type` values: `whatsapp`, `instagram`, `telegram`, `web`
 
-**Expected Response** (200 OK):
+Expected response `201 Created`:
 ```json
 {
-  "id": "uuid-here",
-  "status": "human_handled",
-  ...
-}
-```
-
----
-
-### 4. Release Conversation
-
-**Endpoint**: `POST /api/v1/conversation/conversations/{conversation_id}/release`
-
-**Purpose**: Return conversation control back to the AI.
-
-**Steps**:
-1. Create a new request
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/conversation/conversations/{conversation_id}/release`
-4. Replace `{conversation_id}` with an actual UUID
-5. Add Authorization header
-6. Click **Send**
-
-**Expected Response** (200 OK):
-```json
-{
-  "id": "uuid-here",
-  "status": "active",
-  ...
+  "id": "new-channel-uuid",
+  "type": "whatsapp",
+  "name": "Support Line",
+  "is_active": true,
+  "created_at": "2024-01-01T00:00:00Z"
 }
 ```
 
 ---
 
-## Knowledge Base Endpoints
+### 3.5 Deactivate or Rename a Channel
 
-Base URL: `{{base_url}}/api/v1/knowledge`
+**`PATCH /api/v1/channel/channels/{{channel_id}}`**
 
-**Note**: These endpoints may require authentication.
+```json
+{
+  "name": "Primary WhatsApp Line",
+  "is_active": false
+}
+```
 
-### 1. Upload Document
+---
 
-**Endpoint**: `POST /api/v1/knowledge/knowledge/upload`
+### 3.6 Delete a Channel
 
-**Purpose**: Upload a document to the knowledge base for indexing.
+**`DELETE /api/v1/channel/channels/{{channel_id}}`**
 
-**Supported File Types**: `pdf`, `docx`, `txt`, `csv`
+Expected response `200 OK`:
+```json
+{
+  "message": "Channel deleted"
+}
+```
 
-**Steps**:
-1. Create a new request
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/knowledge/knowledge/upload`
-4. Go to **Body** tab → select **form-data**
-5. Add a key:
-   - **Key**: `file`
-   - **Type**: File
-   - **Value**: Select a file from your computer
-6. Add Authorization header
-7. Click **Send**
+> **Warning:** Deleting a channel that has existing conversations will fail due to the foreign key constraint. Deactivate (`is_active: false`) instead of deleting in production.
 
-**Expected Response** (200 OK):
+---
+
+## 4. Knowledge Base
+
+> **Do this before testing messages.** Documents uploaded here are indexed into the vector store (Qdrant) and retrieved by the AI when answering customer questions.
+
+**Header required:** `Authorization: Bearer {{access_token}}`
+
+**Supported file types:** `pdf`, `docx`, `txt`, `csv`
+
+### 4.1 Upload a Document
+
+**`POST /api/v1/knowledge/knowledge/upload`**
+
+In Postman, use **Body → form-data**:
+
+| Key | Type | Value |
+|---|---|---|
+| `file` | File | Select your file |
+
+Expected response `200 OK`:
 ```json
 {
   "message": "Document uploaded and indexing started.",
@@ -443,22 +498,15 @@ Base URL: `{{base_url}}/api/v1/knowledge`
 }
 ```
 
+Indexing happens asynchronously. Use List Documents (step 4.2) to check `status`.
+
 ---
 
-### 2. List Documents
+### 4.2 List Documents
 
-**Endpoint**: `GET /api/v1/knowledge/knowledge/docs`
+**`GET /api/v1/knowledge/knowledge/docs`**
 
-**Purpose**: Retrieve a list of all documents in the knowledge base.
-
-**Steps**:
-1. Create a new request
-2. Set method to `GET`
-3. Set URL to `{{base_url}}/api/v1/knowledge/knowledge/docs`
-4. Add Authorization header
-5. Click **Send**
-
-**Expected Response** (200 OK):
+Expected response `200 OK`:
 ```json
 [
   {
@@ -471,46 +519,17 @@ Base URL: `{{base_url}}/api/v1/knowledge`
 ]
 ```
 
----
-
-### 3. Delete Document
-
-**Endpoint**: `DELETE /api/v1/knowledge/knowledge/docs/{doc_id}`
-
-**Purpose**: Delete a document from the knowledge base.
-
-**Steps**:
-1. Create a new request
-2. Set method to `DELETE`
-3. Set URL to `{{base_url}}/api/v1/knowledge/knowledge/docs/{doc_id}`
-4. Replace `{doc_id}` with an actual document UUID
-5. Add Authorization header
-6. Click **Send**
-
-**Expected Response** (200 OK):
-```json
-{
-  "message": "Document deleted and removed from knowledge base."
-}
-```
+`status` values: `pending` → `indexing` → `indexed` (or `failed`)
 
 ---
 
-### 4. Reindex Document
+### 4.3 Reindex a Document
 
-**Endpoint**: `POST /api/v1/knowledge/knowledge/docs/{doc_id}/reindex`
+**`POST /api/v1/knowledge/knowledge/docs/{doc_id}/reindex`**
 
-**Purpose**: Trigger re-indexing of a document.
+Use after updating the source document.
 
-**Steps**:
-1. Create a new request
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/knowledge/knowledge/docs/{doc_id}/reindex`
-4. Replace `{doc_id}` with an actual document UUID
-5. Add Authorization header
-6. Click **Send**
-
-**Expected Response** (200 OK):
+Expected response `200 OK`:
 ```json
 {
   "message": "Reindexing started."
@@ -519,172 +538,66 @@ Base URL: `{{base_url}}/api/v1/knowledge`
 
 ---
 
-## Lead Management Endpoints
+### 4.4 Delete a Document
 
-Base URL: `{{base_url}}/api/v1/lead`
+**`DELETE /api/v1/knowledge/knowledge/docs/{doc_id}`**
 
-**Note**: These endpoints may require authentication.
+Removes the DB record and all associated vector chunks from Qdrant.
 
-### 1. List Leads
-
-**Endpoint**: `GET /api/v1/lead/leads`
-
-**Purpose**: Retrieve a list of leads with optional filters.
-
-**Steps**:
-1. Create a new request
-2. Set method to `GET`
-3. Set URL to `{{base_url}}/api/v1/lead/leads`
-4. Go to **Params** tab and add optional query parameters:
-   - `stage`: Filter by stage (e.g., `cold`, `warm`, `hot`, `qualified`, `converted`)
-   - `limit`: Number of results (default: 50, max: 100)
-   - `offset`: Pagination offset (default: 0)
-5. Add Authorization header
-6. Click **Send**
-
-**Example URL**:
-```
-http://localhost:8000/api/v1/lead/leads?stage=warm&limit=20
-```
-
-**Expected Response** (200 OK):
-```json
-[
-  {
-    "id": "lead-uuid-here",
-    "customer_phone": "+1234567890",
-    "customer_name": "John Doe",
-    "customer_email": "john@example.com",
-    "score": 75,
-    "stage": "warm",
-    "qualification_data": {
-      "budget": "high",
-      "timeline": "immediate"
-    },
-    "created_at": "2024-01-01T00:00:00Z"
-  }
-]
-```
-
----
-
-### 2. Get Specific Lead
-
-**Endpoint**: `GET /api/v1/lead/leads/{lead_id}`
-
-**Purpose**: Retrieve details of a specific lead.
-
-**Steps**:
-1. Create a new request
-2. Set method to `GET`
-3. Set URL to `{{base_url}}/api/v1/lead/leads/{lead_id}`
-4. Replace `{lead_id}` with an actual UUID
-5. Add Authorization header
-6. Click **Send**
-
-**Expected Response** (200 OK):
+Expected response `200 OK`:
 ```json
 {
-  "id": "lead-uuid-here",
-  "customer_phone": "+1234567890",
-  "customer_name": "John Doe",
-  "customer_email": "john@example.com",
-  "score": 75,
-  "stage": "warm",
-  "qualification_data": {
-    "budget": "high",
-    "timeline": "immediate"
-  },
-  "created_at": "2024-01-01T00:00:00Z"
+  "message": "Document deleted and removed from knowledge base."
 }
 ```
 
 ---
 
-### 3. Update Lead Stage
+## 5. Webhook — Verify & Test
 
-**Endpoint**: `PATCH /api/v1/lead/leads/{lead_id}/stage`
+> **Do this after channel credentials are configured (Step 3.2).** The webhook URL to register in the Meta dashboard is:
+> `https://yourdomain.com/api/v1/webhook/webhooks/whatsapp`
 
-**Purpose**: Update the stage of a lead.
+No authentication header needed on webhook endpoints — they are called by Meta.
 
-**Valid Stages**: `cold`, `warm`, `hot`, `qualified`, `converted`
+### 5.1 Verify Webhook Subscription
 
-**Steps**:
-1. Create a new request
-2. Set method to `PATCH`
-3. Set URL to `{{base_url}}/api/v1/lead/leads/{lead_id}/stage`
-4. Replace `{lead_id}` with an actual UUID
-5. Go to **Body** tab → select **raw** → **JSON**
-6. Paste the following JSON:
+**`GET /api/v1/webhook/webhooks/whatsapp`**
 
-```json
-{
-  "stage": "hot"
-}
+Meta sends this GET request when you save the webhook URL in their dashboard. Test it manually in Postman to confirm your verify token is correct.
+
+**Query parameters:**
+
+| Param | Value |
+|---|---|
+| `hub.mode` | `subscribe` |
+| `hub.challenge` | `CHALLENGE_CODE` |
+| `hub.verify_token` | Your verify token (set in Step 3.2 config) |
+
+Example URL:
+```
+http://localhost:8000/api/v1/webhook/webhooks/whatsapp?hub.mode=subscribe&hub.challenge=12345&hub.verify_token=YOUR_VERIFY_TOKEN
 ```
 
-7. Add Authorization header
-8. Click **Send**
-
-**Expected Response** (200 OK):
-```json
-{
-  "id": "lead-uuid-here",
-  "stage": "hot",
-  ...
-}
+Expected response `200 OK` (plain text):
+```
+12345
 ```
 
 ---
 
-## Webhook Endpoints
+### 5.2 Simulate an Inbound WhatsApp Message
 
-Base URL: `{{base_url}}/api/v1/webhook`
+**`POST /api/v1/webhook/webhooks/whatsapp`**
 
-### 1. Verify WhatsApp Webhook
+**Headers:**
 
-**Endpoint**: `GET /api/v1/webhook/webhooks/whatsapp`
+| Key | Value |
+|---|---|
+| `X-Hub-Signature-256` | `sha256=HMAC_SIGNATURE` (computed from body + app_secret) |
+| `Content-Type` | `application/json` |
 
-**Purpose**: Verify webhook with Meta (WhatsApp) platform.
-
-**Steps**:
-1. Create a new request
-2. Set method to `GET`
-3. Set URL to `{{base_url}}/api/v1/webhook/webhooks/whatsapp`
-4. Go to **Params** tab and add query parameters:
-   - `hub.mode`: `subscribe`
-   - `hub.challenge`: (provided by Meta)
-   - `hub.verify_token`: (configured in your environment)
-5. Click **Send**
-
-**Example URL**:
-```
-http://localhost:8000/api/v1/webhook/webhooks/whatsapp?hub.mode=subscribe&hub.challenge=CHALLENGE_CODE&hub.verify_token=YOUR_VERIFY_TOKEN
-```
-
-**Expected Response** (200 OK):
-```
-CHALLENGE_CODE
-```
-
----
-
-### 2. Receive WhatsApp Webhook
-
-**Endpoint**: `POST /api/v1/webhook/webhooks/whatsapp`
-
-**Purpose**: Receive incoming messages from WhatsApp.
-
-**Steps**:
-1. Create a new request
-2. Set method to `POST`
-3. Set URL to `{{base_url}}/api/v1/webhook/webhooks/whatsapp`
-4. Go to **Headers** tab and add:
-   - **Key**: `X-Hub-Signature-256`
-   - **Value**: HMAC-SHA256 signature (computed by Meta)
-5. Go to **Body** tab → select **raw** → **JSON**
-6. Paste a sample WhatsApp webhook payload:
-
+**Body (raw JSON):**
 ```json
 {
   "object": "whatsapp_business_account",
@@ -709,11 +622,11 @@ CHALLENGE_CODE
             "messages": [
               {
                 "from": "+1987654321",
-                "id": "wamid.ID",
-                "timestamp": "1234567890",
+                "id": "wamid.TEST_MESSAGE_ID",
+                "timestamp": "1700000000",
                 "type": "text",
                 "text": {
-                  "body": "Hello, I'm interested in your product"
+                  "body": "Hi, I'm interested in a Dubai travel package for 2 people in December"
                 }
               }
             ]
@@ -726,100 +639,323 @@ CHALLENGE_CODE
 }
 ```
 
-7. Click **Send**
-
-**Expected Response** (200 OK):
+Expected response `200 OK`:
 ```json
 {
   "status": "ok"
 }
 ```
 
----
+**What happens next (async):**
+1. Webhook returns `200 ok` immediately (< 1 second)
+2. RabbitMQ consumer picks up the message
+3. AI pipeline runs: RAG retrieval → Gemini/OpenAI generates reply
+4. Reply is sent back to the customer via WhatsApp
+5. Conversation and lead records are created/updated in the DB
 
-## Postman Collection Setup
+After sending, wait ~3–10 seconds then check Conversations (Step 6) to see the result.
 
-To organize your API tests, create a Postman collection:
-
-1. Click **Collections** → **Create Collection**
-2. Name it: `Sales Agent API`
-3. Create folders for each endpoint group:
-   - Authentication
-   - Conversations
-   - Knowledge Base
-   - Lead Management
-   - Webhooks
-4. Add requests to appropriate folders
-5. Set collection-level variables:
-   - `base_url`: `http://localhost:8000`
-6. Add authentication at collection level:
-   - Type: `Bearer Token`
-   - Token: `{{access_token}}`
+> **Local testing tip:** To skip signature verification during local development, you can temporarily bypass the signature check. In production, always compute a real `X-Hub-Signature-256`.
 
 ---
 
-## Troubleshooting
+## 6. Conversations
 
-### Common Issues
+**Header required:** `Authorization: Bearer {{access_token}}`
 
-**1. Connection Refused**
-- Ensure the API server is running
-- Check that the port (default: 8000) is correct
-- Verify firewall settings
+### 6.1 List Conversations
 
-**2. 401 Unauthorized**
-- Ensure you have a valid access token
-- Check that the Authorization header is set correctly: `Bearer {{access_token}}`
-- Token may have expired - use the refresh endpoint
+**`GET /api/v1/conversation/conversations`**
 
-**3. 403 Forbidden**
-- Verify your user has the required permissions
-- Check that the verify token is correct for webhook verification
+**Optional query parameters:**
 
-**4. 422 Validation Error**
-- Check request body matches the expected schema
-- Ensure all required fields are present
-- Verify data types (e.g., email format, UUID format)
+| Param | Type | Example |
+|---|---|---|
+| `status` | string | `active`, `escalated`, `human_handled`, `closed` |
+| `channel` | string | `whatsapp`, `instagram` — filters by channel type |
+| `limit` | int | `50` (default) |
+| `offset` | int | `0` (default) |
 
-**5. 500 Internal Server Error**
-- Check server logs for detailed error messages
-- Ensure all dependencies (Database, RabbitMQ) are running
-- Verify environment variables are configured correctly
+Example:
+```
+GET /api/v1/conversation/conversations?status=active&channel=whatsapp&limit=10
+```
+
+Expected response `200 OK`:
+```json
+[
+  {
+    "id": "conv-uuid-here",
+    "channel_id": "550e8400-e29b-41d4-a716-446655440000",
+    "customer_identifier": "+1987654321",
+    "customer_name": "John Doe",
+    "status": "active",
+    "created_at": "2024-01-01T00:00:00Z",
+    "messages": []
+  }
+]
+```
 
 ---
 
-## Additional Resources
+### 6.2 Get Conversation with Messages
 
-- **FastAPI Documentation**: [https://fastapi.tiangolo.com/](https://fastapi.tiangolo.com/)
-- **Postman Learning Center**: [https://learning.postman.com/](https://learning.postman.com/)
-- **Project Documentation**: Check the `docs/` directory for additional guides
+**`GET /api/v1/conversation/conversations/{conversation_id}`**
+
+Example URL:
+```
+GET /api/v1/conversation/conversations/conv-uuid-here
+```
+
+Expected response `200 OK`:
+```json
+{
+  "id": "conv-uuid-here",
+  "channel_id": "550e8400-e29b-41d4-a716-446655440000",
+  "customer_identifier": "+1987654321",
+  "customer_name": "John Doe",
+  "status": "active",
+  "created_at": "2024-01-01T00:00:00Z",
+  "messages": [
+    {
+      "id": "msg-uuid",
+      "role": "user",
+      "content": "Hi, I'm interested in a Dubai travel package for 2 people in December",
+      "media_type": null,
+      "media_url": null,
+      "tokens_used": 18,
+      "latency_ms": 0,
+      "created_at": "2024-01-01T00:00:01Z"
+    },
+    {
+      "id": "msg-uuid-2",
+      "role": "assistant",
+      "content": "Hello John! Dubai in December is a fantastic choice...",
+      "media_type": null,
+      "media_url": null,
+      "tokens_used": 145,
+      "latency_ms": 2340,
+      "created_at": "2024-01-01T00:00:06Z"
+    }
+  ]
+}
+```
+
+---
+
+### 6.3 Human Takeover
+
+**`POST /api/v1/conversation/conversations/{conversation_id}/takeover`**
+
+Pauses AI responses and marks the conversation for human handling.
+
+```json
+{
+  "agent_id": "agent-uuid-here"
+}
+```
+
+Expected response `200 OK`:
+```json
+{
+  "id": "conv-uuid-here",
+  "status": "human_handled"
+}
+```
+
+---
+
+### 6.4 Release Back to AI
+
+**`POST /api/v1/conversation/conversations/{conversation_id}/release`**
+
+Returns control to the AI agent.
+
+Expected response `200 OK`:
+```json
+{
+  "id": "conv-uuid-here",
+  "status": "active"
+}
+```
+
+---
+
+## 7. Lead Management
+
+**Header required:** `Authorization: Bearer {{access_token}}`
+
+Leads are created automatically when a new customer sends their first message. The AI scorer updates `score` and `stage` on every message based on detected signals (pricing questions, destination mentions, travel dates, etc.).
+
+### 7.1 List Leads
+
+**`GET /api/v1/lead/leads`**
+
+**Optional query parameters:**
+
+| Param | Type | Values |
+|---|---|---|
+| `stage` | string | `cold`, `warm`, `hot`, `qualified`, `converted` |
+| `limit` | int | `50` (default) |
+| `offset` | int | `0` (default) |
+
+Example:
+```
+GET /api/v1/lead/leads?stage=hot&limit=20
+```
+
+Expected response `200 OK`:
+```json
+{
+  "data": [
+    {
+      "id": "lead-uuid-here",
+      "customer_identifier": "+1987654321",
+      "customer_name": "John Doe",
+      "customer_email": null,
+      "score": 75,
+      "stage": "hot",
+      "qualification_data": {
+        "budget": "high",
+        "timeline": "immediate"
+      },
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+**Score → Stage mapping:**
+
+| Score | Stage |
+|---|---|
+| 86–100 | `qualified` |
+| 61–85 | `hot` |
+| 31–60 | `warm` |
+| 0–30 | `cold` |
+
+---
+
+### 7.2 Get Specific Lead
+
+**`GET /api/v1/lead/leads/{lead_id}`**
+
+Expected response `200 OK`:
+```json
+{
+  "id": "lead-uuid-here",
+  "customer_identifier": "+1987654321",
+  "customer_name": "John Doe",
+  "customer_email": null,
+  "score": 75,
+  "stage": "hot",
+  "qualification_data": {},
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+---
+
+### 7.3 Manually Update Lead Stage
+
+**`PATCH /api/v1/lead/leads/{lead_id}/stage`**
+
+Override the AI-computed stage (e.g., after a sales call).
+
+```json
+{
+  "stage": "converted"
+}
+```
+
+Valid stages: `cold`, `warm`, `hot`, `qualified`, `converted`
+
+Expected response `200 OK`:
+```json
+{
+  "message": "Lead stage updated to converted"
+}
+```
 
 ---
 
 ## Quick Reference
 
-| Endpoint | Method | Auth Required |
-|----------|--------|---------------|
-| `/api/v1/auth/register` | POST | No |
-| `/api/v1/auth/login` | POST | No |
-| `/api/v1/auth/refresh` | POST | No |
-| `/api/v1/auth/logout` | POST | No |
-| `/api/v1/auth/password-reset/request` | POST | No |
-| `/api/v1/auth/password-reset/confirm` | POST | No |
-| `/api/v1/conversation/conversations` | GET | Yes |
-| `/api/v1/conversation/conversations/{id}` | GET | Yes |
-| `/api/v1/conversation/conversations/{id}/takeover` | POST | Yes |
-| `/api/v1/conversation/conversations/{id}/release` | POST | Yes |
-| `/api/v1/knowledge/knowledge/upload` | POST | Yes |
-| `/api/v1/knowledge/knowledge/docs` | GET | Yes |
-| `/api/v1/knowledge/knowledge/docs/{id}` | DELETE | Yes |
-| `/api/v1/knowledge/knowledge/docs/{id}/reindex` | POST | Yes |
-| `/api/v1/lead/leads` | GET | Yes |
-| `/api/v1/lead/leads/{id}` | GET | Yes |
-| `/api/v1/lead/leads/{id}/stage` | PATCH | Yes |
-| `/api/v1/webhook/webhooks/whatsapp` | GET | No |
-| `/api/v1/webhook/webhooks/whatsapp` | POST | No |
+### Endpoint Map
+
+| # | Endpoint | Method | Auth |
+|---|---|---|---|
+| 2.1 | `/api/v1/auth/register` | POST | No |
+| 2.2 | `/api/v1/auth/login` | POST | No |
+| 2.3 | `/api/v1/auth/refresh` | POST | No |
+| 2.4 | `/api/v1/auth/logout` | POST | No |
+| 2.5 | `/api/v1/auth/password-reset/request` | POST | No |
+| 2.6 | `/api/v1/auth/password-reset/confirm` | POST | No |
+| 3.1 | `/api/v1/channel/channels` | GET | Yes |
+| 3.2 | `/api/v1/channel/channels/{id}` | PATCH | Yes |
+| 3.3 | `/api/v1/channel/channels/{id}` | GET | Yes |
+| 3.4 | `/api/v1/channel/channels` | POST | Yes |
+| 3.5 | `/api/v1/channel/channels/{id}` | PATCH | Yes |
+| 3.6 | `/api/v1/channel/channels/{id}` | DELETE | Yes |
+| 4.1 | `/api/v1/knowledge/knowledge/upload` | POST | Yes |
+| 4.2 | `/api/v1/knowledge/knowledge/docs` | GET | Yes |
+| 4.3 | `/api/v1/knowledge/knowledge/docs/{id}/reindex` | POST | Yes |
+| 4.4 | `/api/v1/knowledge/knowledge/docs/{id}` | DELETE | Yes |
+| 5.1 | `/api/v1/webhook/webhooks/whatsapp` | GET | No |
+| 5.2 | `/api/v1/webhook/webhooks/whatsapp` | POST | No |
+| 6.1 | `/api/v1/conversation/conversations` | GET | Yes |
+| 6.2 | `/api/v1/conversation/conversations/{id}` | GET | Yes |
+| 6.3 | `/api/v1/conversation/conversations/{id}/takeover` | POST | Yes |
+| 6.4 | `/api/v1/conversation/conversations/{id}/release` | POST | Yes |
+| 7.1 | `/api/v1/lead/leads` | GET | Yes |
+| 7.2 | `/api/v1/lead/leads/{id}` | GET | Yes |
+| 7.3 | `/api/v1/lead/leads/{id}/stage` | PATCH | Yes |
+
+### Recommended Testing Order
+
+```
+Login (2.2)
+  → List Channels (3.1) — grab channel_id
+  → Configure Channel Credentials (3.2) — set phone_number_id / access_token / etc.
+  → Upload Knowledge Document (4.1) — wait for status = "indexed"
+  → Verify Webhook (5.1) — confirm verify_token works
+  → Simulate Inbound Message (5.2) — triggers full AI pipeline
+  → List Conversations (6.1) — see conversation created
+  → Get Conversation (6.2) — verify AI replied
+  → List Leads (7.1) — see auto-created lead with score
+```
 
 ---
 
-**Last Updated**: 2024-06-07
+## Troubleshooting
+
+**`404 No active channel of type 'whatsapp' registered`**
+- The `channels` table is empty or has no active WhatsApp channel.
+- Run `alembic upgrade head` to apply migrations (which seed the default channel).
+- Then call Step 3.1 to confirm the channel exists.
+
+**`403` on webhook verification**
+- The `hub.verify_token` doesn't match the `verify_token` stored in the channel's `config`.
+- Update the channel via Step 3.2 and retry.
+
+**`401 Unauthorized`**
+- Access token is expired. Use Step 2.3 (refresh) to get a new one and update the environment variable.
+
+**`422 Validation Error`**
+- Check that your request body matches the schema exactly.
+- Inspect the `detail` array in the response — FastAPI lists every validation failure.
+
+**`500 Internal Server Error`**
+- Check server logs for the full traceback.
+- Ensure PostgreSQL, RabbitMQ, and Redis are all running.
+- Verify all required environment variables are set.
+
+**AI reply not arriving (message sends `200 ok` but no WhatsApp reply)**
+- Check RabbitMQ is running and the `ai.messages.queue` is consuming.
+- Check server logs for errors in the AI consumer (`ai_message_consumer`).
+- Confirm the channel `config` has a valid `access_token` and `phone_number_id`.
+
+---
+
+*Last updated: 2026-07-26*

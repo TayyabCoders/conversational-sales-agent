@@ -19,8 +19,8 @@ class MessageResponse(BaseModel):
 
 class ConversationResponse(BaseModel):
     id: UUID
-    channel: str
-    customer_phone: str
+    channel_id: UUID
+    customer_identifier: str
     customer_name: Optional[str] = None
     status: str
     created_at: datetime
@@ -31,8 +31,8 @@ class ConversationResponse(BaseModel):
 
 class ConversationListResponse(BaseModel):
     id: UUID
-    channel: str
-    customer_phone: str
+    channel_id: UUID
+    customer_identifier: str
     customer_name: Optional[str] = None
     status: str
     created_at: datetime

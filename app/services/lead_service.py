@@ -46,7 +46,7 @@ class LeadService:
         try:
             logger.info(f"LeadService: Getting lead {lead_id}...")
             
-            lead = await self.lead_repository.get_by_id(lead_id)
+            lead = await self.lead_repository.findById(lead_id)
             
             if not lead:
                 logger.warning(f"LeadService: Lead {lead_id} not found")

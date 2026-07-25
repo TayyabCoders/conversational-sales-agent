@@ -65,13 +65,13 @@ def verify_password_reset_token(token: str) -> Union[str, None]:
     return None
 
 
-def verify_whatsapp_signature(body: bytes, signature_header: str) -> None:
-    """Verify Meta HMAC-SHA256 webhook signature. Raises 403 if invalid."""
+def verify_meta_signature(body: bytes, signature_header: str, secret: str) -> None:
+    """Verify Meta HMAC-SHA256 webhook signature (WhatsApp & Instagram). Raises 403 if invalid."""
     if not signature_header.startswith("sha256="):
         raise HTTPException(403, "Missing or invalid webhook signature")
 
     expected = hmac.new(
-        settings.META_APP_SECRET.encode(),
+        secret.encode(),
         body,
         hashlib.sha256,
     ).hexdigest()

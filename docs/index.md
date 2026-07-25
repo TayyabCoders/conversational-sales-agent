@@ -35,6 +35,16 @@ How to test the system manually and verify features work.
 
 ---
 
+## Development
+
+Implementation guides for specific engineering tasks.
+
+| Document | Description |
+|----------|-------------|
+| [Channel Abstraction](development/channel-abstraction-implementation.md) | End-to-end guide: how every layer changed to support WhatsApp, Instagram, Telegram, and web chat |
+
+---
+
 ## Roadmap
 
 What needs to change and in what order.

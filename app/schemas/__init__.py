@@ -19,7 +19,8 @@ from app.schemas.user_schema import (
     RefreshToken as UserRefreshToken,
 )
 from app.schemas.socket_schema import *
-from app.schemas.webhook_schema import (
+from app.schemas.webhook_schema import InboundMessage
+from app.schemas.channels.whatsapp_schema import (
     WhatsAppTextMessage,
     WhatsAppAudio,
     WhatsAppImage,
@@ -29,8 +30,8 @@ from app.schemas.webhook_schema import (
     WhatsAppChange,
     WhatsAppEntry,
     WhatsAppWebhookPayload,
-    InboundMessage,
 )
+from app.schemas.channel_schema import ChannelCreate, ChannelUpdate, ChannelResponse
 from app.schemas.conversation_schema import (
     MessageResponse,
     ConversationResponse,
@@ -77,6 +78,10 @@ __all__ = [
     "ConversationResponse",
     "ConversationListResponse",
     "TakeoverRequest",
+    # Channel schemas
+    "ChannelCreate",
+    "ChannelUpdate",
+    "ChannelResponse",
     # Knowledge schemas
     "KnowledgeDocResponse",
     # Lead schemas

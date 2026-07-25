@@ -20,8 +20,6 @@ This architecture review evaluates the conversational sales agent platform for p
 
 **Critical Weaknesses:**
 - **Only WhatsApp channel implemented** - no Instagram, Facebook Messenger, Telegram, Email, or Voice
-- **No cross-channel identity resolution** - users cannot be recognized across different channels
-- **No multi-tenant architecture** - cannot serve multiple travel agencies
 - **No human-in-the-loop handoff mechanism** - escalation exists but no actual human agent interface
 - **No evaluation framework** - no retrieval quality, hallucination detection, or sales effectiveness metrics
 - **No CRM or booking engine integrations** - critical for travel agency operations
@@ -29,6 +27,8 @@ This architecture review evaluates the conversational sales agent platform for p
 - **No semantic caching or cost optimization** - every query incurs full LLM cost
 - **No CI/CD pipeline** - manual deployment only
 - **Insufficient testing** - only basic infrastructure tests, no AI/agent tests
+
+> **Note:** Multi-tenancy (serving multiple agencies) is out of scope for now. The current target is a single-agency deployment. This will be revisited in a later phase.
 
 **Production Readiness Score:** **4/10**
 
@@ -109,14 +109,13 @@ The platform follows a **clean architecture pattern** with the following layers:
 
 **Weaknesses:**
 - **Not truly channel-agnostic** - only WhatsApp channel exists
-- **No multi-tenant architecture** - single database schema for all agencies
 - **No circuit breaker pattern** for external API failures (LLM providers, WhatsApp API)
 - **No distributed tracing** (OpenTelemetry/Jaeger) for debugging complex flows
 - **No request correlation IDs** across services
 - **No graceful degradation** when LLM providers are down
 - **No dead letter queue processing** for failed messages
 
-**Production Viability:** The architecture is **sound for a single-tenant, single-channel pilot** but **not suitable for multi-tenant, omnichannel production**.
+**Production Viability:** The architecture is **sound for a single-agency, single-channel pilot** but needs work before omnichannel production.
 
 ---
 
@@ -263,9 +262,8 @@ class MemoryService:
 3. **No knowledge validation** - no way to verify accuracy of uploaded documents
 4. **No knowledge taxonomy** - no categorization of documents (visa rules, pricing, policies)
 5. **No knowledge expiration** - outdated pricing/promotions not automatically removed
-6. **No knowledge access control** - all knowledge accessible to all conversations
-7. **No knowledge analytics** - no tracking of which knowledge is used most
-8. **No knowledge feedback loop** - no way to mark knowledge as helpful/unhelpful
+6. **No knowledge analytics** - no tracking of which knowledge is used most
+7. **No knowledge feedback loop** - no way to mark knowledge as helpful/unhelpful
 
 **Missing Components:**
 - Automated knowledge refresh from external sources
@@ -273,7 +271,6 @@ class MemoryService:
 - Knowledge validation workflow
 - Knowledge taxonomy/categorization
 - Knowledge expiration dates
-- Per-tenant knowledge isolation
 - Knowledge usage analytics
 - Knowledge feedback mechanism
 
@@ -380,17 +377,15 @@ splitter = RecursiveCharacterTextSplitter(
 
 **Weaknesses:**
 1. **No horizontal scalability** - PostgreSQL single-node, no sharding
-2. **No multi-tenancy isolation** - all tenants share same vector space
-3. **No backup/restore strategy** - no automated backups for vector data
-4. **No vector database monitoring** - no tracking of index performance
-5. **No HNSW indexes** - IVFFlat slower than HNSW for large datasets
-6. **No vector compression** - no quantization for storage optimization
-7. **No hybrid search** - no keyword + vector search combination
-8. **No re-ranking** - no cross-encoder for result refinement
+2. **No backup/restore strategy** - no automated backups for vector data
+3. **No vector database monitoring** - no tracking of index performance
+4. **No HNSW indexes** - IVFFlat slower than HNSW for large datasets
+5. **No vector compression** - no quantization for storage optimization
+6. **No hybrid search** - no keyword + vector search combination
+7. **No re-ranking** - no cross-encoder for result refinement
 
 **Missing Components:**
 - Horizontal scaling strategy (sharding, read replicas)
-- Multi-tenant vector isolation
 - Automated backup/restore
 - Vector database monitoring
 - HNSW indexes for better performance
@@ -398,7 +393,7 @@ splitter = RecursiveCharacterTextSplitter(
 - Hybrid search (keyword + vector)
 - Re-ranking with cross-encoders
 
-**Production Impact:** **Cannot scale horizontally** for large knowledge bases. **No multi-tenancy** for serving multiple agencies.
+**Production Impact:** **Cannot scale horizontally** for large knowledge bases.
 
 ---
 
@@ -803,58 +798,52 @@ SIGNAL_SCORES = {
    - Voice Channel adapter (Twilio/Vapi)
    - Website Live Chat Channel adapter
 
-2. **Multi-Tenancy:**
-   - Tenant isolation at database level
-   - Per-tenant configuration
-   - Per-tenant knowledge base
-   - Per-tenant AI configuration
-
-3. **Human-in-the-Loop:**
+2. **Human-in-the-Loop:**
    - Human agent interface
    - Conversation handoff mechanism
    - Agent assignment logic
    - Real-time agent dashboard
 
-4. **CRM Integration:**
+3. **CRM Integration:**
    - CRM API connectors (Salesforce, HubSpot, Pipedrive)
    - Lead synchronization
    - Contact management
    - Activity logging
 
-5. **Booking Engine Integration:**
+4. **Booking Engine Integration:**
    - Travel booking API connectors (Amadeus, Sabre, Travelport)
    - Real-time availability checking
    - Booking creation
    - Payment processing
 
-6. **Evaluation Framework:**
+5. **Evaluation Framework:**
    - Retrieval quality metrics
    - Groundedness evaluation
    - Response quality scoring
    - Sales effectiveness metrics
    - Regression testing
 
-7. **Advanced AI Features:**
+6. **Advanced AI Features:**
    - Tool calling
    - Multi-step reasoning
    - Workflow orchestration
    - Streaming responses
    - Semantic caching
 
-8. **Cross-Channel Identity Resolution:**
+7. **Cross-Channel Identity Resolution:**
    - Identity graph
    - Customer profiles
    - Cross-channel conversation merging
    - Identity verification
 
-9. **Cost Optimization:**
+8. **Cost Optimization:**
    - Semantic caching
    - Prompt caching
    - Token optimization
    - Cost monitoring
    - Budget alerts
 
-10. **Security & Compliance:**
+9. **Security & Compliance:**
     - PII masking
     - Encryption at rest
     - Audit logging
@@ -875,11 +864,11 @@ SIGNAL_SCORES = {
 
 **Critical Gaps (-6 points):**
 - **Only WhatsApp channel implemented** (cannot support omnichannel requirement)
-- **No multi-tenant architecture** (cannot serve multiple agencies)
-- **No cross-channel identity resolution** (cannot provide unified experience)
 - **No evaluation framework** (cannot measure AI quality)
 - **No human-in-the-loop mechanism** (cannot escalate to humans)
 - **No CRM/booking integrations** (cannot perform actual travel operations)
+- **No CI/CD pipeline** (manual deployments, high error risk)
+- **No cost optimization** (every query incurs full LLM cost)
 
 The platform is **suitable for pilot testing with WhatsApp only** but requires **major redesign** before production deployment as an omnichannel travel sales platform.
 
@@ -892,11 +881,6 @@ The platform is **suitable for pilot testing with WhatsApp only** but requires *
 1. **Single Channel Bottleneck**
    - **Risk:** Only WhatsApp implemented, cannot support Instagram, Facebook, Telegram, Email, Voice
    - **Impact:** Cannot meet business requirement for omnichannel support
-   - **Probability:** 100% (current state)
-
-2. **No Multi-Tenancy**
-   - **Risk:** All agencies share same database, no data isolation
-   - **Impact:** Data leakage between agencies, cannot scale to multiple customers
    - **Probability:** 100% (current state)
 
 3. **No Cross-Channel Identity Resolution**
@@ -951,43 +935,31 @@ The platform is **suitable for pilot testing with WhatsApp only** but requires *
    - Create unified message schema
    - Implement channel capability negotiation
 
-2. **Implement Multi-Tenancy**
-   - Add tenant_id to all tables
-   - Implement tenant isolation at database level
-   - Add per-tenant configuration
-   - Implement per-tenant knowledge base isolation
-
-3. **Implement Cross-Channel Identity Resolution**
-   - Create customer entity with unified identity
-   - Implement identity resolution service
-   - Implement cross-channel conversation merging
-   - Create identity graph
-
-4. **Implement Message Deduplication**
+2. **Implement Message Deduplication**
    - Add idempotency keys for webhook processing
    - Implement Redis-based deduplication
    - Add message replay mechanism
    - Implement dead letter queue
 
-5. **Implement Human-in-the-Loop**
+3. **Implement Human-in-the-Loop**
    - Create human agent interface
    - Implement conversation handoff mechanism
    - Create real-time agent dashboard
    - Implement agent assignment logic
 
-6. **Implement Evaluation Framework**
+4. **Implement Evaluation Framework**
    - Add retrieval quality metrics (precision, recall, MRR)
    - Implement groundedness evaluation
    - Add response quality scoring
    - Implement regression testing
 
-7. **Implement CI/CD Pipeline**
+5. **Implement CI/CD Pipeline**
    - Create GitHub Actions or GitLab CI pipeline
    - Add automated testing
    - Implement staging environment
    - Add blue-green deployment
 
-8. **Implement Security & Compliance**
+6. **Implement Security & Compliance**
    - Add PII masking in logs
    - Implement encryption at rest
    - Add audit logging
@@ -1155,20 +1127,14 @@ The platform is **suitable for pilot testing with WhatsApp only** but requires *
 
 ### Phase 1: Foundation (4-6 weeks) - Must Have
 
-**Week 1-2: Multi-Tenancy & Identity**
-- Add tenant_id to all database tables
-- Implement tenant isolation middleware
-- Create customer entity with unified identity
-- Implement identity resolution service
-
-**Week 3-4: Multi-Channel Support**
+**Week 1-2: Multi-Channel Support**
 - Create Instagram Channel adapter
 - Create Facebook Messenger Channel adapter
 - Create Telegram Channel adapter
 - Implement message normalization layer
 - Create unified message schema
 
-**Week 5-6: Reliability & Security**
+**Week 3-4: Reliability & Security**
 - Implement message deduplication
 - Add dead letter queue
 - Implement PII masking
@@ -1242,18 +1208,18 @@ The platform demonstrates **solid foundational architecture** with clean separat
 
 **Recommendation:**
 1. **Proceed with WhatsApp-only pilot** to validate AI capabilities and customer feedback
-2. **Implement Phase 1 (Foundation)** before expanding to production
-3. **Focus on multi-tenancy and multi-channel support** as highest priority
-4. **Add evaluation framework** to measure AI quality and detect regressions
-5. **Implement human-in-the-loop** before handling real customer conversations
+2. **Complete the Improvement Roadmap** (Langfuse, retry, SDK upgrade, evals, guardrails) first
+3. **Add evaluation framework** to measure AI quality and detect regressions
+4. **Implement human-in-the-loop** before handling real customer conversations at scale
+5. **Expand to multi-channel** once the single-channel pipeline is solid
 
-**Estimated Time to Production-Ready:** 6-8 months with dedicated team of 3-5 developers
+**Estimated Time to Production-Ready (single-agency):** 2-3 months  
+**Multi-tenancy / multi-agency:** deferred — revisit after single-agency pilot is stable
 
 **Key Success Factors:**
+- AI quality measurable via eval framework
+- Human-in-the-loop working for escalations
 - Multi-channel implementation quality
-- Cross-channel identity resolution effectiveness
-- AI evaluation framework coverage
-- Human-in-the-loop integration
 - Business integration (CRM, booking engine) completeness
 
 ---

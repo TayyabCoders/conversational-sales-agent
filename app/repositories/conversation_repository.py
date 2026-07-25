@@ -19,8 +19,8 @@ class ConversationRepository(BaseRepository[Conversation]):
 
     async def get_or_create(
         self,
-        customer_phone: str,
-        channel: str,
+        customer_identifier: str,
+        channel_id,
         customer_name: str | None = None,
     ) -> Conversation:
         try:
@@ -28,8 +28,8 @@ class ConversationRepository(BaseRepository[Conversation]):
 
             # Check if an active conversation already exists
             existing = await self.findOne(filters={
-                "customer_phone": customer_phone,
-                "channel": channel,
+                "customer_identifier": customer_identifier,
+                "channel_id": channel_id,
                 "status": "active",
             })
             if existing:
@@ -38,8 +38,8 @@ class ConversationRepository(BaseRepository[Conversation]):
 
             # Create new conversation
             conversation_data = {
-                "customer_phone": customer_phone,
-                "channel": channel,
+                "customer_identifier": customer_identifier,
+                "channel_id": channel_id,
                 "customer_name": customer_name,
                 "status": "active",
             }
@@ -111,7 +111,7 @@ class ConversationRepository(BaseRepository[Conversation]):
     async def list_all(
         self,
         status: str | None = None,
-        channel: str | None = None,
+        channel_id=None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Conversation]:
@@ -121,8 +121,8 @@ class ConversationRepository(BaseRepository[Conversation]):
             filters = {}
             if status:
                 filters["status"] = status
-            if channel:
-                filters["channel"] = channel
+            if channel_id:
+                filters["channel_id"] = channel_id
 
             conversations = await self.findAll(filters=filters)
             

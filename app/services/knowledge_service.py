@@ -98,7 +98,7 @@ class KnowledgeService:
         try:
             logger.info(f"KnowledgeService: Getting document {doc_id}...")
             
-            doc = await self.knowledge_repository.get_by_id(doc_id)
+            doc = await self.knowledge_repository.findById(doc_id)
             
             if not doc:
                 logger.warning(f"KnowledgeService: Document {doc_id} not found")

@@ -1,5 +1,6 @@
 from typing import Any
 
+from app.models.channel_model import Channel
 from app.models.user_model import User
 from app.models.conversation_model import Conversation
 from app.models.message_model import Message
@@ -25,11 +26,12 @@ async def initialize_models(database: Any) -> None:
 
 
 __all__ = [
+    "Channel",
     "User",
     "Conversation",
     "Message",
     "Lead",
     "KnowledgeDoc",
     "KnowledgeChunk",
-    "initialize_models"
+    "initialize_models",
 ]

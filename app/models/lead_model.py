@@ -23,7 +23,7 @@ class Lead(Base):
         ForeignKey("conversations.id")
     )
     
-    customer_phone: Mapped[str] = mapped_column(String(50), index=True)
+    customer_identifier: Mapped[str] = mapped_column(String(100), index=True)
     
     customer_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     
