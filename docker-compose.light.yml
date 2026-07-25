@@ -99,7 +99,7 @@ services:
   # =========================
   fastapi-prometheus:
     image: prom/prometheus:v2.51.2
-    container_name: fastapi-prometheus4
+    container_name: fastapi-prometheus
     ports:
       - "9191:9090"
     volumes:
