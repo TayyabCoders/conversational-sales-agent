@@ -37,6 +37,8 @@ async def lifespan(app: FastAPI):
     
     prometheus = container.resolve('prometheus')
     redis = container.resolve('cache')
+    logger.info("Connecting to Redis...")
+    await redis.connect()
     manager.set_dependencies(prometheus=prometheus, redis=redis)
     await manager.start()
 
@@ -68,6 +70,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down application...")
     await manager.stop()
     await rabbitmq.disconnect()
+    await redis.disconnect()
     await database.disconnect()
     logger.info("✓ Application shutdown complete")
 

@@ -6,6 +6,7 @@ from app.middlewares.request_middleware import RequestContextMiddleware
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.middlewares.security_middleware import SecurityHeadersMiddleware
 from app.middlewares.rate_limit_middleware import RateLimitMiddleware
+from app.core.slowapi_limiter import limiter
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -50,6 +51,8 @@ def register_middlewares(app: FastAPI):
     logger.info("Security headers middleware registered")
 
     # 4. Add rate limiting middleware
+    # SlowAPIMiddleware reads app.state.limiter at request time — must be set before first request
+    app.state.limiter = limiter
     app.add_middleware(RateLimitMiddleware)
     logger.info("Rate limiting middleware registered")
 

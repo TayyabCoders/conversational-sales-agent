@@ -46,10 +46,10 @@ class RAGService:
         embedding_column = "embedding_gemini" if self.use_gemini else "embedding"
         sql = text(f"""
             SELECT content,
-                   1 - ({embedding_column} <=> :query_vec::vector) AS similarity
+                   1 - ({embedding_column} <=> CAST(:query_vec AS vector)) AS similarity
             FROM   knowledge_chunks
-            WHERE  1 - ({embedding_column} <=> :query_vec::vector) > 0.72
-            ORDER  BY {embedding_column} <=> :query_vec::vector
+            WHERE  1 - ({embedding_column} <=> CAST(:query_vec AS vector)) > 0.5
+            ORDER  BY {embedding_column} <=> CAST(:query_vec AS vector)
             LIMIT  :top_k
         """)
 

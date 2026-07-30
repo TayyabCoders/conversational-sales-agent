@@ -135,7 +135,7 @@ async def _process(
 
     response_text, confidence = await agent.process_message(
         conversation_id=conversation_id,
-        tenant_config=ai_config,
+        config=ai_config,
         message=message_text,
     )
 
@@ -146,7 +146,7 @@ async def _process(
         return
 
     # --- Update lead score ---
-    scorer = LeadScorer(lead_repo)
+    scorer = LeadScorer()
     await scorer.update_from_message(lead_id, message_text)
 
     # --- Human-like delay ---

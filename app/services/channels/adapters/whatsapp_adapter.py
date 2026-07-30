@@ -47,8 +47,9 @@ class WhatsAppWebhookAdapter(BaseWebhookAdapter):
                             (msg.image and msg.image.id)
                         ) if msg.type != "text" else None,
                         contact_name=(
-                            (change.value.contacts or [{}])[0]
-                            .get("profile", {}).get("name")
+                            change.value.contacts[0].profile.get("name")
+                            if change.value.contacts and change.value.contacts[0].profile
+                            else None
                         ),
                     ))
         return messages

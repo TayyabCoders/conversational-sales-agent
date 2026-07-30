@@ -1,16 +1,13 @@
-from app.di.container import container
 from dependency_injector.wiring import inject, Provide
-import json
-from redis.asyncio import Redis
-from structlog import get_logger
+import structlog
 
-logger = get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class MemoryService:
     @inject
-    def __init__(self, redis = Provide["redis_client"]):
-        self.redis = redis
+    def __init__(self, cache=Provide["cache"]):
+        self.cache = cache
         self.window = 20
         self.ttl = 7200  # 2 hours
 
@@ -19,9 +16,9 @@ class MemoryService:
 
     async def get_history(self, conversation_id: str) -> list[dict]:
         try:
-            raw = await self.redis.get(self._key(conversation_id))
-            return json.loads(raw) if raw else []
-        except Exception as e:
+            history = await self.cache.get(self._key(conversation_id))
+            return history if isinstance(history, list) else []
+        except Exception:
             logger.error(f"MemoryService: Failed to get history for conversation {conversation_id}.", exc_info=True)
             return []
 
@@ -29,18 +26,15 @@ class MemoryService:
         try:
             history = await self.get_history(conversation_id)
             history.append({"role": role, "content": content})
-            # Keep only last N messages (sliding window)
             history = history[-self.window:]
-            await self.redis.setex(
-                self._key(conversation_id), self.ttl, json.dumps(history)
-            )
-        except Exception as e:
+            await self.cache.set(self._key(conversation_id), history, ttl=self.ttl)
+        except Exception:
             logger.error(f"MemoryService: Failed to append to history for conversation {conversation_id}.", exc_info=True)
-            raise e
+            raise
 
     async def clear(self, conversation_id: str) -> None:
         try:
-            await self.redis.delete(self._key(conversation_id))
-        except Exception as e:
+            await self.cache.delete(self._key(conversation_id))
+        except Exception:
             logger.error(f"MemoryService: Failed to clear history for conversation {conversation_id}.", exc_info=True)
-            raise e
+            raise
